@@ -194,11 +194,16 @@ const ProjectDisplay = {
             }
 
             // On click, render the project ONLY if the target isn't an anchor tag or social link
+            // Clicking runs "open N" in the CLI so the user sees it's interactive;
+            // the command itself performs the navigation.
             segmentElement.addEventListener('click', (e) => {
                 if (e.target.closest('a') || e.target.closest('.social-icons')) {
                     return; // Do not trigger project navigation
                 }
-                this.renderSpecificProject(project);
+                const number = projectsData.projects.indexOf(project) + 1;
+                if (!ConsoleModule.runCommand(`open ${number}`)) {
+                    this.renderSpecificProject(project); // no CLI on the page
+                }
             });
 
             projectsGrid.appendChild(segmentElement);
@@ -539,16 +544,30 @@ const ConsoleModule = {
     this.inputElement.addEventListener('keydown', (e) => this.handleKeyDown(e));
   },
 
+  // Run whatever is in the input box as if the user pressed Enter.
+  submitInput() {
+    const command = this.inputElement.value.trim();
+    if (command.length > 0) {
+      this.printLine(`> ${command}`, 'user-cmd');
+      this.history.push(command);
+      this.historyIndex = this.history.length;
+      this.inputElement.value = '';
+      this.processCommand(command);
+    }
+  },
+
+  // Enter a command in the prompt and submit it immediately, so UI actions
+  // visibly drive the CLI. Returns false if the page has no CLI input.
+  runCommand(command) {
+    if (!this.inputElement) return false;
+    this.inputElement.value = command;
+    this.submitInput();
+    return true;
+  },
+
   handleKeyDown(e) {
     if (e.key === 'Enter') {
-      const command = this.inputElement.value.trim();
-      if (command.length > 0) {
-        this.printLine(`> ${command}`, 'user-cmd');
-        this.history.push(command);
-        this.historyIndex = this.history.length;
-        this.processCommand(command);
-        this.inputElement.value = '';
-      }
+      this.submitInput();
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       if (this.historyIndex > 0) {

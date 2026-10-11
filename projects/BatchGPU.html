@@ -90,13 +90,13 @@
   <thead><tr><th>Core</th><th>BatchGPU</th></tr></thead>
   <tbody>
     <tr><td class="n">NetworkGateway&lt;<wbr>TProtocolHandler,<wbr> TCommand&gt;</td>
-        <td><code>BatchProtocolHandler</code> and <code>BatchCommand</code>, a fixed 112-byte struct: <code>ORDER</code>, <code>CANCEL</code>, <code>BATCH_CLEAR</code>, or <code>INVALID</code> (an order that failed a check).</td></tr>
+        <td><code>BatchProtocolHandler</code> and <code>BatchCommand</code>, a fixed 112-byte struct: <code>ORDER</code>, <code>CANCEL</code>, <code>BATCH_CLEAR</code>, or <code>INVALID</code> (an order that failed a check). Every client frame starts with a protocol version byte.</td></tr>
     <tr><td class="n">MatchingService&lt;<wbr>TCommand,<wbr> TEngine&gt;</td>
         <td><code>BatchEngine</code>: holds the open batch (the orders waiting for the next clear) and clears on <code>BATCH_CLEAR</code>.</td></tr>
     <tr><td class="n">SPSCProducerPolicy&lt;<wbr>TEvent&gt;</td>
         <td><code>BatchEvent</code>, a fixed 112-byte struct: <code>ACCEPTED</code>, <code>REJECTED</code>, <code>CANCELED</code>, <code>FILL</code>, <code>ORDER_DONE</code>, <code>BATCH_DONE</code>, <code>BATCH_VOIDED</code>.</td></tr>
     <tr><td class="n">EgressGateway&lt;<wbr>TGateway,<wbr> TEvent,<wbr> TEncoder&gt;</td>
-        <td><code>BatchEvent<wbr>Encoder</code>: one 101-byte frame per event, to the order's connection and a public feed.</td></tr>
+        <td><code>BatchEvent<wbr>Encoder</code>: one 102-byte frame per event, to the order's connection and a public feed.</td></tr>
     <tr><td class="n">OrderTrace::ext_counters</td>
         <td><code>GpuExtSlot</code>: the clear's lifted units, bids filled, bids unfilled and solver pivots (steps).</td></tr>
   </tbody>

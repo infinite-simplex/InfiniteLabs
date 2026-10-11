@@ -1,0 +1,337 @@
+<!-- EventContractLOB explainer — a fragment loaded into the project panel by script.js.
+     Behavior: EventContractLOB.js (mount/unmount). Styles: shared/explainer.css.
+     The pipeline itself (replication, failover, telemetry) is the ToyExchange Core project. -->
+<div class="explainer">
+<header class="hero">
+  <div class="box">
+    <div class="kv"><span class="k">SUBTITLE:</span> <span class="v">A limit order book for binary-outcome event contracts (prices 0–100), speaking NASDAQ OUCH 4.2</span></div>
+    <div class="kv"><span class="k">STATUS:</span> <span class="v warn">DRAFT — measurements not yet filled in</span></div>
+    <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.09.29</span></div>
+    <div class="kv"><span class="k">STACK:</span> <span class="v">C++20 · NASDAQ OUCH 4.2 · built on ToyExchange Core · googletest</span></div>
+    <div class="kv"><span class="k">SOURCE:</span>
+      <a href="https://github.com/infinite-simplex/EventContractLOB" target="_blank">→ EventContractLOB</a> &nbsp;
+      <a href="#" data-project="TOY EXCHANGE CORE">→ the Core it runs on (project)</a>
+    </div>
+    <div class="kv"><span class="k">JUMP TO:</span> <a href="#overview">overview</a> · <a href="#wire">wire</a> · <a href="#matching">matching</a> · <a href="#contract">replication contract</a> · <a href="#performance">book internals</a> · <a href="#results">results</a> · <a href="#tests">tests</a> · <a href="#limits">limits</a> · <a href="#reproduce">reproduce</a></div>
+    <div class="kv"><span class="k">OPEN TODOs:</span> <span class="v warn" id="todoCount">…</span></div>
+    <details id="todoIndex"><summary>list all placeholders</summary><ol id="todoList"></ol></details>
+  </div>
+</header>
+
+<!-- =====================================================================
+     OVERVIEW
+     ===================================================================== -->
+<h2 id="overview">OVERVIEW</h2>
+
+<p>
+  EventContractLOB is a limit order book for <strong>binary-outcome event contracts</strong>: prices are whole cents from 0 to 100, and clients enter orders over real <strong>NASDAQ OUCH 4.2</strong> framing.
+  It is a portfolio project, not a production exchange.
+</p>
+<p>
+  It doesn't implement its own networking, replication or failover. Those come from <a href="#" data-project="TOY EXCHANGE CORE">ToyExchange Core</a>, a product-agnostic pipeline: this repository is what a product has to
+  supply to use it — a protocol handler, a command, an engine, and an event encoder. This page covers only those pieces; the sequencing, gap recovery, leader election, fencing and timing machinery are described there.
+</p>
+
+<figure class="fig" id="figPlug">
+  <div class="fig-head"><span class="id">FIG 1</span> What this repository plugs into Core <span class="spacer"></span></div>
+  <div class="fig-scroll">
+    <svg id="svgPlug" viewBox="0 0 980 330" role="img"
+         aria-label="Four Core templates on top, each with the EventContractLOB class that fills it in underneath."></svg>
+  </div>
+  <figcaption>
+    <strong>Top row:</strong> generic Core templates. <strong>Bottom row:</strong> the classes here that fill them in. The dot follows a command through the pipeline: protocol handler → engine → event encoder.
+    The fourth pair is the book's own counters, carried through Core's telemetry without Core knowing what they mean.
+  </figcaption>
+</figure>
+
+<!-- =====================================================================
+     WIRE
+     ===================================================================== -->
+<h2 id="wire">OUCH IN, EVENTS OUT</h2>
+
+<h3>Ingress</h3>
+<p>
+  A frame is <code>[2-byte big-endian length][1-byte message type]</code> followed by the real OUCH 4.2 struct. The length envelope is this project's own transport framing — real OUCH runs over SoupBinTCP, which isn't implemented —
+  and only what follows the type byte is byte-accurate to the spec. Three message types are handled: <code>O</code> (enter), <code>X</code> (cancel) and <code>U</code> (replace).
+</p>
+<ul>
+  <li><strong>What closes a connection.</strong> A frame whose length is wrong for its type, or a type byte that isn't one of the three. Nothing downstream could parse it.</li>
+  <li><strong>What gets rejected instead.</strong> A well-formed frame with bad content becomes an <code>INVALID</code> command and flows through the normal pipeline to a reject, without dropping the connection:
+      an unknown symbol, a price above 100 cents, or shares outside 1–999,999 (OUCH's "greater than 0, less than 1,000,000"). The same checks run again inside the book, so nothing that bypasses the handler can rest an out-of-range order.</li>
+  <li><strong>Price.</strong> OUCH's fixed point is dollars × 10,000, so <code>4200</code> is $0.42; dividing by 100 gives cents exactly. A sub-cent remainder is truncated rather than rejected — this exchange can't represent it, and rejecting real OUCH precision would defeat accepting unmodified clients.</li>
+  <li><strong>Order type.</strong> Real OUCH has no order-type byte, so the type is recovered from <code>timeInForce</code>: <code>0</code> means immediate-or-cancel, <code>99998</code> ("market hours") means good-till-day, anything else is a plain limit order.
+      That makes only three types reachable over the wire — limit, IOC and good-till-day. Fill-or-kill, market and good-till-cancel exist in the engine and are covered by book-level tests.</li>
+  <li><strong>Firm.</strong> The 4-character market-participant code is packed into an integer, which drives self-trade prevention.</li>
+  <li><strong>Tokens.</strong> Each order token maps to an order id so cancel and replace can find their target. A cancel for an unknown token is accepted and does nothing: a cancel racing a fill is routine, not a protocol error.
+      A replace inherits side, firm and type from the order it replaces.</li>
+</ul>
+
+<h3>Egress</h3>
+<p>
+  The engine emits an event for every state change. Core's egress gateway encodes each one once and sends the same bytes to the originating client (private ack) and to the public group. The frame is a custom compact layout, not ITCH:
+</p>
+<pre class="code">[2B BE length][1B type][8B order id][1B side][1B price][4B qty][4B leaves qty][8B match id][1B reject reason]
+type: A accepted · J rejected · E executed · C canceled · U replaced · D deleted (declared, never emitted)</pre>
+
+<!-- =====================================================================
+     MATCHING
+     ===================================================================== -->
+<h2 id="matching">THE BOOK: HOW ORDERS MATCH</h2>
+<p>
+  One book per replica process. Bids and asks each have 101 price levels, and within a level orders queue first-in first-out, so priority is price then time.
+</p>
+
+<div class="tscroll">
+<table class="spec">
+  <thead><tr><th>Order</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td class="n">LIMIT / GOOD_TILL_CANCEL</td><td>Trades against everything that crosses at its limit price or better, then rests any remainder.</td></tr>
+    <tr><td class="n">GOOD_TILL_DAY</td><td>Like a limit order, and if any of it rests, schedules an end-of-day cancel (below).</td></tr>
+    <tr><td class="n">IMMEDIATE_OR_CANCEL</td><td>Takes what crosses at its limit or better; the remainder is canceled (a <code>CANCELED</code> event with nothing left).</td></tr>
+    <tr><td class="n">FILL_OR_KILL</td><td>First counts the qualifying liquidity. If it isn't enough, the order is rejected with <code>INSUFFICIENT_LIQUIDITY</code> and nothing trades — not even the part that could have.</td></tr>
+    <tr><td class="n">MARKET</td><td>Sweeps whatever is there at any price; the remainder is canceled.</td></tr>
+    <tr><td class="n">Cancel (wire <code>X</code>)</td><td>Removes a resting order and reports it canceled with nothing left. An unknown or already-filled order is a safe no-op.</td></tr>
+    <tr><td class="n">Replace (wire <code>U</code>)</td><td>Cancels the old order and enters a new limit order under a new id, acknowledged as <code>REPLACED</code>. The new order goes to the back of the queue. An unknown id is rejected with <code>UNKNOWN_ORDER</code>.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>The rules that hold for all of them</h3>
+<ul>
+  <li><strong>Trades print at the resting order's price.</strong> A bid at 60 that meets an ask at 50 trades at 50, on both legs.</li>
+  <li><strong>Every fill is two events</strong> — one per side — sharing a <code>match_id</code>, and event sequence numbers only ever increase.</li>
+  <li><strong>Self-trade prevention is a hard stop.</strong> If the next resting order at the front of the line belongs to the aggressor's own firm, the aggressor's remainder is rejected with <code>SELF_TRADING_PREVENTION</code> and the resting order is left alone.
+      Fills against other firms that came earlier in the queue still happen first. Fill-or-kill's liquidity count applies the same stop.</li>
+  <li><strong>Every rejection names its reason:</strong> unknown order, invalid quantity, self-trade, insufficient liquidity, price out of range, unknown symbol.</li>
+</ul>
+
+<figure class="fig" id="figSweep">
+  <div class="fig-head"><span class="id">FIG 2</span> Matching, traced from two tests
+    <span class="spacer"></span>
+    <button class="btn" id="swPlay1" type="button">[ PLAY: SWEEP ]</button>
+    <button class="btn danger" id="swPlay2" type="button">[ PLAY: SELF-TRADE ]</button>
+  </div>
+  <div class="fig-scroll">
+    <svg id="svgSweep" viewBox="0 0 980 250" role="img"
+         aria-label="Animation of an aggressive bid consuming resting asks price level by price level, and a second scenario where it stops at an order from its own firm."></svg>
+  </div>
+  <div class="cli-log" id="logSweep"></div>
+  <figcaption>
+    <strong>Sweep:</strong> three asks of 100 at 50, 51 and 52 from firm A; a bid of 250 at 52 from firm B takes 100, 100, then 50, leaving 50 at 52.
+    <strong>Self-trade:</strong> firm B has 40 and firm A has 60 at 50; a bid of 100 from firm A fills the 40, then stops at its own order. Both are drawn from tests in <code>ProductTesting.cpp</code>.
+  </figcaption>
+</figure>
+
+<h3>Timed cancels</h3>
+<p>
+  A <code>GOOD_TILL_DAY</code> order that rests asks a small service to cancel it at the end-of-day cutoff. That service is just another OUCH client of the gateway: when a cancel comes due it sends an ordinary cancel over TCP,
+  so the cancel is sequenced and replicated like any other command. It only sends while its own replica believes it is leader, so a standby's copy stays quiet. The cutoff is a fixed UTC−5 offset (see limits).
+</p>
+
+<!-- =====================================================================
+     CONTRACT
+     ===================================================================== -->
+<h2 id="contract">WHAT REPLICATION ASKS OF THE BOOK</h2>
+<p>
+  Replication, gap recovery and failover are Core's job (see the <a href="#" data-project="TOY EXCHANGE CORE">Core project</a>). The book's part is to be something replicas can run independently and still agree:
+</p>
+<ul>
+  <li><strong>Matching is a function of the command stream.</strong> No matching decision reads a clock or a random source. The wall clock appears as a timestamp on outgoing events and, for good-till-day orders, in the cutoff time handed to the cancel service — neither changes what trades.</li>
+  <li><strong>Counters are local and deterministic.</strong> Match ids and event sequence numbers each start at 1 and only increment, so replicas fed the same commands produce the same ids.</li>
+  <li><strong>Timed actions re-enter through the gateway</strong> — the cancel service above — instead of firing locally.</li>
+  <li><strong>Standbys still run the book.</strong> Every replica matches every command; only the leader's events are published.</li>
+</ul>
+
+<!-- =====================================================================
+     PERFORMANCE
+     ===================================================================== -->
+<h2 id="performance">THE BOOK'S DATA STRUCTURES</h2>
+<p>
+  These are the latency choices that belong to this product. The pipeline-level ones — lock-free rings, busy-polling, single-writer sequencing, the memory-mapped store — are on the
+  <a href="#" data-project="TOY EXCHANGE CORE">Core page</a>. Each card lists what the choice gives up alongside what it buys.
+</p>
+
+<div class="cards">
+
+  <div class="card">
+    <h4>Price ladder indexed directly by price</h4>
+    <p>101 price levels in a fixed array; a price <em>is</em> the index.</p>
+    <p class="buys"><span class="lbl">BUYS</span> O(1) access to any level, no hashing, no tree.</p>
+    <p class="costs"><span class="lbl">COSTS</span> Only works because the price domain is tiny (0–100 whole cents). A wide-tick market would need a different structure.</p>
+    <p class="where">MatchingService/OrderBook.hpp · MAX_LEVELS</p>
+  </div>
+
+  <div class="card">
+    <h4>128-bit occupancy bitmap for best bid / ask</h4>
+    <p>Two 64-bit words mark which levels hold orders; best ask is the lowest set bit (<code>ctz</code>), best bid the highest (<code>clz</code>).</p>
+    <p class="buys"><span class="lbl">BUYS</span> Best price without scanning levels — at most two word checks.</p>
+    <p class="costs"><span class="lbl">COSTS</span> The bitmap must be kept in sync whenever a level becomes occupied or empty. After the best level, matching still steps one price at a time (at most 101 steps).</p>
+    <p class="where">OrderBookBits · find_first_level / find_last_level</p>
+  </div>
+
+  <div class="card">
+    <h4>Pre-allocated order pool with a free list</h4>
+    <p>Each side owns 262,144 order slots up front; inserting pops a free slot, filling or canceling pushes it back.</p>
+    <p class="buys"><span class="lbl">BUYS</span> No heap allocation on the matching path.</p>
+    <p class="costs"><span class="lbl">COSTS</span> A hard cap per side. When the pool is empty, <code>insert_order</code> throws <code>std::runtime_error</code>.</p>
+    <p class="where">BookSide · BOOK_POOL_SIZE, m_free_pool</p>
+  </div>
+
+  <div class="card">
+    <h4>Intrusive FIFO list per price level</h4>
+    <p>Orders link to each other by pool index (<code>prev</code>/<code>next</code>), with a head and tail per level.</p>
+    <p class="buys"><span class="lbl">BUYS</span> O(1) append, O(1) removal from the middle, and price-time priority for free.</p>
+    <p class="costs"><span class="lbl">COSTS</span> Walking a deep level chases links through memory. <span class="todo">measure matching cost against level depth</span></p>
+    <p class="where">PriceLevel · Order::m_prev_idx / m_next_idx</p>
+  </div>
+
+  <div class="card">
+    <h4>Flat order-id lookup table</h4>
+    <p>A vector of 10,000,000 order pointers, indexed by order id.</p>
+    <p class="buys"><span class="lbl">BUYS</span> O(1) find for cancel and replace.</p>
+    <p class="costs"><span class="lbl">COSTS</span> About 80 MB reserved up front, and it assumes ids stay below 10,000,000 (the replace path checks; see limits).</p>
+    <p class="where">OrderBook · MAX_GLOBAL_ORDERS</p>
+  </div>
+
+  <div class="card">
+    <h4>A size budget for the pooled order</h4>
+    <p>The order record is asserted to stay within 56 bytes.</p>
+    <p class="buys"><span class="lbl">BUYS</span> Pool slots stay small and dense, so more of a level fits in cache.</p>
+    <p class="costs"><span class="lbl">COSTS</span> Adding a field to an order can break the build (<code>static_assert</code>) and forces a decision about what to trade for it.</p>
+    <p class="where">MatchingService/Order.hpp</p>
+  </div>
+
+  <div class="card">
+    <h4>Two counters per order</h4>
+    <p>As the book walks price levels it counts the levels touched and the resting orders visited, in two of Core's opaque counter slots (<code>LobExtSlot</code>). They reach the aggregator as <code>ExtCounter0</code> and <code>ExtCounter1</code>.</p>
+    <p class="buys"><span class="lbl">BUYS</span> Visibility into how much matching work each order caused, alongside how long it took.</p>
+    <p class="costs"><span class="lbl">COSTS</span> Two increments inside the matching loop. <span class="todo">measure what they cost</span> A test checks a two-level, three-order sweep bumps them by exactly 2 and 3.</p>
+    <p class="where">LobExtSlot · walk_price_level</p>
+  </div>
+
+</div>
+
+<figure class="fig" id="figBitmap">
+  <div class="fig-head"><span class="id">FIG 3</span> Occupancy bitmap <span class="spacer"></span>
+    <button class="btn" id="bmReset" type="button">[ RESET ]</button>
+  </div>
+  <div class="fig-scroll bm">
+    <div class="bm-scroll">
+      <div class="bm-row"><span class="bm-label">ASKS</span> — best ask = lowest occupied level</div>
+      <div class="bm-cells" id="bmAsk"></div>
+      <div class="bm-ticks" id="bmTicks"></div>
+      <p class="bm-out" id="bmAskOut"></p>
+      <div class="bm-row"><span class="bm-label">BIDS</span> — best bid = highest occupied level</div>
+      <div class="bm-cells" id="bmBid"></div>
+      <p class="bm-out" id="bmBidOut"></p>
+      <p class="bm-out" id="bmSpread"></p>
+    </div>
+  </div>
+  <figcaption>
+    <strong>Click a cell</strong> to rest or remove an order at that price. Levels 0–100 need 101 bits, so the mask is two 64-bit words; the highlighted cell is what <code>find_first_level()</code> (asks) or
+    <code>find_last_level()</code> (bids) returns. The example words are computed live in the same way the C++ does it.
+  </figcaption>
+</figure>
+
+<figure class="fig" id="figLevel">
+  <div class="fig-head"><span class="id">FIG 4</span> One price level: FIFO list over a pooled slab <span class="spacer"></span></div>
+  <div class="fig-scroll">
+    <svg id="svg7" viewBox="0 0 980 300" role="img"
+         aria-label="A price level whose head and tail point into a chain of pooled orders linked by prev and next indices, next to a stack of free pool slots."></svg>
+  </div>
+  <figcaption>
+    <strong>Slot numbers are illustrative.</strong> A new order takes the top free slot and is linked at the tail. A filled or canceled order is unlinked from wherever it sits and its slot goes back on the free stack.
+    Links are 32-bit pool indices rather than pointers.
+  </figcaption>
+</figure>
+
+<!-- =====================================================================
+     RESULTS
+     ===================================================================== -->
+<h2 id="results">RESULTS</h2>
+<p>
+  Nothing in this section has been measured yet — every number is a placeholder to be filled from real runs. These are the engine-side numbers; queuing, network and failover figures are on the
+  <a href="#" data-project="TOY EXCHANGE CORE">Core page</a>, and the test setup is described there.
+</p>
+
+<div class="tscroll">
+<table class="spec">
+  <thead><tr><th>Metric</th><th>p50</th><th>p99</th><th>p99.9</th><th>max</th></tr></thead>
+  <tbody>
+    <tr><td class="n">EngineExecutionNs</td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td></tr>
+    <tr><td class="n">ExtCounter0 (price levels touched)</td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td></tr>
+    <tr><td class="n">ExtCounter1 (resting orders touched)</td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  <span class="todo">a short table of EngineExecutionNs by order type or by book depth, once there is a load generator that can produce it</span>
+</p>
+
+<!-- =====================================================================
+     TESTS
+     ===================================================================== -->
+<h2 id="tests">TESTS</h2>
+<p>
+  83 test cases at the time of writing, run by <code>ctest</code> and in CI. They cover:
+</p>
+<ul>
+  <li><strong>Matching semantics</strong> — priority, sweeping several levels, the trade-price rule, and each order type's behavior at the edges (empty book, partial liquidity, limit-price cutoffs).</li>
+  <li><strong>Self-trade prevention</strong> — including that earlier fills against other firms still happen and that a fill-or-kill's liquidity count stops at the firm's own order.</li>
+  <li><strong>Validation</strong> — out-of-range prices, zero and oversized quantities (the limit is inclusive at 999,999), unknown symbols, unknown orders, on both the wire and book paths.</li>
+  <li><strong>Cancel, replace and timed cancels</strong> — including a rejected replace leaving the original order untouched, and scheduling under the new token after a replace.</li>
+  <li><strong>The OUCH wire path</strong> — frames over a loopback TCP connection through Core's real gateway and multicast receiver, malformed frames closing the connection, content errors not doing so.</li>
+  <li><strong>Pipeline behavior through this product</strong> — gap recovery, an unrecoverable gap, trace-arena collisions, and leader-gating of timed cancels (Core has no protocol-agnostic stand-ins to test these with on its own).</li>
+</ul>
+<p>
+  <strong>By hand:</strong> <code>Tools/two_replica_smoke_test.sh</code> runs a gateway and two replicas and checks that the books converge, that exactly one replica publishes, that the epoch strictly increases after killing the leader,
+  and that the survivor's output still arrives. It is not part of CI. <span class="todo">paste a recorded run of the smoke test</span>
+</p>
+
+<!-- =====================================================================
+     LIMITS
+     ===================================================================== -->
+<h2 id="limits">KNOWN LIMITS</h2>
+<p>Product-level limits; the pipeline's are on the <a href="#" data-project="TOY EXCHANGE CORE">Core page</a>.</p>
+
+<div class="note limit"><b class="tag">CAPACITY CEILINGS</b>
+  Each book side holds at most 262,144 resting orders (insertion throws beyond that), and the order-id table has 10,000,000 entries. The replace path bounds-checks an id against the table; the plain insert path does not.
+  <span class="todo">decide and document what happens past 10 million orders in a day</span></div>
+<div class="note limit"><b class="tag">GTD CUTOFF</b>
+  The end-of-day cancel time is a fixed UTC−5 offset, not daylight-saving-aware Eastern time, so it is an hour off for most of the year. The code says so in a comment; the build's standard library lacks the time-zone database.</div>
+<div class="note limit"><b class="tag">PRICE DOMAIN</b>
+  Prices are whole cents from 0 to 100. The book's direct-indexed ladder depends on that; it is not a general price structure.</div>
+<div class="note limit"><b class="tag">ORDER TYPES OVER THE WIRE</b>
+  Only limit, IOC and good-till-day can be entered over OUCH, because <code>timeInForce</code> is the only order-type signal it carries. The other types are engine-level and tested there.</div>
+<div class="note limit"><b class="tag">ONE BOOK</b>
+  One book per replica process. Symbols are validated against a registry but don't select between books.</div>
+<div class="note limit"><b class="tag">EGRESS FORMAT</b>
+  The public feed is a custom compact frame, not ITCH, and the <code>DELETED</code> event type is declared but never emitted (a full cancel reports <code>CANCELED</code> with nothing left).</div>
+<div class="note limit"><b class="tag">MEASUREMENTS</b>
+  No performance claims yet; every number above is a placeholder.</div>
+
+<!-- =====================================================================
+     REPRODUCE
+     ===================================================================== -->
+<h2 id="reproduce">BUILD AND RUN</h2>
+<p>Linux only (it uses <code>epoll</code>, <code>mmap</code>, multicast sockets and <code>CLOCK_TAI</code> directly); on Windows, build under WSL. The build fetches Core from GitHub, pinned to a release tag.</p>
+<pre class="code">cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j"$(nproc)"
+ctest --test-dir build --output-on-failure
+
+# gateway + 2 replicas + performance service
+./run_exchange.sh 2 build
+
+# from another shell: two crossing orders
+build/Tools/OuchTestClient/OuchTestClient --side B --price 50 --qty 10 --firm-id 1
+build/Tools/OuchTestClient/OuchTestClient --side S --price 50 --qty 10 --firm-id 2 --listen-ms 500
+
+# kill only the current leader and watch the survivor take over
+./kill_leader.sh run
+tail -f run/performance.log</pre>
+
+<footer>
+  DRAFT · this page makes no measurement claims; every yellow box is a number or check still owed.
+</footer>
+</div>

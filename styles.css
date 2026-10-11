@@ -1,0 +1,576 @@
+  :root {
+    --NEON_GREEN: rgb(72, 208, 75);
+    --BOX_SHADOW: rgba(72, 208, 75, 0.425);
+    --GRAY: #bbbbbb;
+    --RED: #c20000;
+    --BG_COLOR: rgb(2, 11, 19);
+    --HOVER_COLOR: rgba(2, 10, 78, .4);
+    /* Height of the terminal as a share of the visible screen. It shrinks on its
+       own if the window is too short to fit it under the header box. */
+    --CLI_HEIGHT: 90vh;
+  }
+
+  .glossary-font-secondary {
+    font-family: "VT323", monospace;
+    font-weight: 400;
+    font-style: normal;
+    color: var(--BOX_SHADOW);
+    margin-bottom: 5px;
+    margin-top: 10px;
+  }
+
+  .path-segment.clickable {
+    color: var(--NEON_GREEN);
+    cursor: pointer;
+    text-decoration: underline;
+    transition: color 0.2s ease;
+  }
+
+  .path-segment.clickable:hover {
+    color: var(--BOX_SHADOW);
+  }
+
+  .loading-screen {
+    position: fixed;
+    width: 100%;
+    height: 100%;
+    padding: 30px;
+    background: var(--BG_COLOR);
+    color: var(--GRAY);
+    display: flex;
+    font-family: monospace;
+    font-size: 24px;
+    z-index: 1000;
+  }
+
+  body {
+    margin: 0;
+    padding: 0;
+    background-color: var(--BG_COLOR);
+    color: var(--GRAY);
+    font-family: 'Courier New', monospace;
+    line-height: 1.2;
+    /* The page itself never scrolls: the left panel stays put and the right
+       panel scrolls on its own (see .right-panel). */
+    overflow: hidden;
+  }
+
+  .container {
+    display: grid;
+    grid-template-columns: 350px 1fr;
+    /* One row exactly as tall as the container, so .right-panel is constrained
+       to the screen (and therefore scrolls) instead of growing with its content. */
+    grid-template-rows: minmax(0, 1fr);
+    gap: 20px;
+    height: 100vh;
+    height: 100dvh;
+    align-items: stretch;
+  }
+
+  .left-panel,
+  .right-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  /* Scrolls independently of the left panel, with the scrollbar hidden.
+     Wheel, touch and keyboard scrolling all still work. */
+  .right-panel {
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .right-panel::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+.left-panel {
+    box-sizing: border-box;
+    padding-left: 10px;
+    padding-bottom: 10px;
+    padding-top: 10px;
+    padding-right: 0;
+
+    height: 100%;
+    min-height: 0;
+
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+
+    z-index: 2000;
+    position: relative;
+
+    overflow: hidden;
+}
+
+  .header-box {
+    border: 2px solid var(--NEON_GREEN);
+    padding: 10px;
+    background-color: var(--BG_COLOR);
+    margin-bottom: 10px;
+  }
+
+  .header-title {
+    text-align: center;
+    border-bottom: 1px solid var(--NEON_GREEN);
+    padding-bottom: 10px;
+  }
+
+  .project_statistics {
+    text-align: center;
+    padding-top: 10px;
+    margin: 0px;
+  }
+
+  .stats-container {
+    display: grid;
+    background-color: var(--BG_COLOR);
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 20px;
+  }
+
+  .stats-box {
+    background-color: var(--BG_COLOR);
+    border: 2px solid var(--NEON_GREEN);
+    padding: 10px;
+    height: 100px;
+    display: flex;
+    flex-direction: column;
+    overflow-y: hidden;
+  }
+
+  .projects-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 200px));
+    gap: 10px;
+  }
+
+  .project-segment {
+    border: 1px solid var(--NEON_GREEN);
+    padding: 15px;
+    padding-top: 25px;
+    background-color: var(--BG_COLOR);
+    text-align: center;
+    position: relative;
+    min-height: 100px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    outline: 1px solid var(--NEON_GREEN);
+    outline-offset: -4px;
+    box-shadow: 3px 3px var(--BOX_SHADOW);
+  }
+
+  .project-segment:hover {
+    background-color: var(--HOVER_COLOR);
+    box-shadow: 5px 5px var(--BOX_SHADOW);
+    transform: translateY(-2px);
+  }
+
+  .segment-id {
+    font-size: .9em;
+    color: var(--GRAY);
+    position: absolute;
+    top: 5px;
+    left: 5px;
+  }
+
+  .segment-title {
+    font-weight: bold;
+  }
+
+  .nominal {
+    color: var(--GRAY);
+    font-size: 0.8em;
+  }
+
+  .project-display {
+    font-family: 'Courier New', monospace;
+    font-size: 1.1em;
+    line-height: 1.6;
+  }
+
+  .menu-item {
+    border: 2px solid var(--NEON_GREEN);
+    padding: 10px;
+    margin-bottom: 5px;
+    background-color: var(--BG_COLOR);
+    cursor: pointer;
+    transition: background-color 0.3s;
+  }
+
+  .menu-item:hover {
+    background-color: var(--HOVER_COLOR);
+  }
+
+  .social-icons {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .social-icons a {
+    color: var(--GRAY);
+    transition: color 0.2s;
+  }
+
+  .social-icons a:hover {
+    color: #0376fa;
+  }
+
+  .repair-text {
+    font-size: 0.7em;
+    color: var(--GRAY);
+    text-align: center;
+    padding: 5px;
+    border: 1px solid #333;
+    margin-top: 5px;
+    word-wrap: break-word;
+  }
+
+  .loading-content {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .hidden {
+    display: none;
+  }
+
+  .error-message {
+    color: var(--RED);
+    font-weight: bold;
+    animation: pulse 2s infinite;
+  }
+
+  .success {
+    color: var(--NEON_GREEN)
+  }
+
+  #mainContent {
+    opacity: 0;
+    transition: opacity 1s;
+    height: 100vh;
+    height: 100dvh;
+  }
+
+  #mainContent.visible {
+    opacity: 1;
+  }
+
+  .news {
+    display: block;
+    margin-top: 15px;
+    font-size: 0.9em;
+    overflow: hidden;
+    overflow-wrap: break-word;
+    overflow-y: hidden;
+  }
+
+  .change {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 14px;
+    right: 5px;
+  }
+
+  .change.positive {
+    color: var(--NEON_GREEN)
+  }
+
+  .change.negative {
+    color: var()
+  }
+
+  .news a {
+    color: var(--NEON_GREEN);
+    text-decoration: none;
+  }
+
+  .news a:hover {
+    text-decoration: underline;
+  }
+
+  .project-segment.corrupted {
+    border-color: var(--RED);
+    outline-color: var(--RED);
+    background-color: #2b0000;
+    /* Darker background to show the corrupted effect */
+    box-shadow: 3px 3px rgba(255, 0, 0, 0.5);
+    /* Red shadow for the corrupted look */
+  }
+
+  .corruption-line {
+    height: 5px;
+    background-color: var(--RED);
+    margin: 10px 0;
+  }
+
+  .corruption-text {
+    color: var(--GRAY);
+    font-weight: bold;
+  }
+
+  .debug-btn {
+    padding: 10px 20px;
+    background-color: var(--RED);
+    color: var(--GRAY);
+    border: none;
+    font-weight: bold;
+    cursor: pointer;
+  }
+
+  .debug-btn:hover {
+    background-color: var(--RED);
+  }
+
+  .debug-box {
+    display: none;
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background-color: var(--BG_COLOR);
+    border: 2px solid var(--RED);
+    padding: 20px;
+    color: var(--GRAY);
+    text-align: center;
+    box-shadow: 3px 3px rgba(255, 0, 0, 0.7);
+  }
+
+  .debug-box button {
+    background-color: var(--RED);
+    color: var(--GRAY);
+    border: none;
+    padding: 10px;
+    cursor: pointer;
+  }
+
+  .debug-box button:hover {
+    background-color: var(--RED);
+  }
+
+  .cli-interface {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    background: var(--BG_COLOR);
+    border: 2px solid var(--NEON_GREEN);
+    padding: 10px;
+    height: 100%;
+  }
+
+  .content-panel {
+    display: none;
+  }
+
+  .content-panel.active {
+    display: block;
+    padding: 20px;
+  }
+
+  /* Hamburger button styles */
+  .hamburger-btn {
+    display: none;
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 3000;
+    background: var(--BG_COLOR);
+    color: var(--NEON_GREEN);
+    border: 2px solid var(--NEON_GREEN);
+    border-radius: 4px;
+    font-size: 1.5em;
+    cursor: pointer;
+  }
+
+  .hamburger-btn:hover {
+    background: var(--HOVER_COLOR);
+  }
+
+  /* Overlay for left panel on mobile */
+  .left-panel-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 1);
+    z-index: 1999;
+  }
+
+  @media (max-width: 900px) {
+    .container {
+      grid-template-columns: 1fr;
+    }
+
+    .hamburger-btn {
+      display: block;
+    }
+
+    .left-panel {
+      display: none;
+      position: fixed;
+      left: 0;
+      top: 0;
+      width: 100vw;
+      height: 100vh;
+      box-shadow: none;
+      z-index: 2000;
+      padding: 20px 20px 20px 20px;
+    }
+
+    .left-panel.mobile-visible {
+      display: flex !important;
+    }
+  }
+
+  /* Ensure both main title and breadcrumb use identical VT323 font styling */
+.glossary-font-secondary,
+#project_path {
+  font-family: "VT323", monospace;
+  font-size: 1.5rem; /* Explicit size matching h2/h3 scale */
+  font-weight: 400;
+  font-style: normal;
+  color: var(--NEON_GREEN);
+  margin-top: 10px;
+  margin-bottom: 5px;
+}
+
+/* Base path segment style */
+.path-segment {
+  color: var(--NEON_GREEN);
+  font-family: inherit;
+  font-weight: inherit;
+  display: inline-block;
+}
+
+/* Dim non-clickable current page segment slightly if desired, or keep uniform */
+.path-segment.current {
+  opacity: 0.8;
+}
+
+/* Clickable segment styling (prevents font shift/color fade) */
+.path-segment.clickable {
+  color: var(--NEON_GREEN);
+  cursor: pointer;
+  text-decoration: underline;
+  transition: opacity 0.2s ease;
+}
+
+.path-segment.clickable:hover {
+  opacity: 0.6;
+}
+
+.cli-interface {
+    background-color: #0d0d0d;
+    color: #00ff66;
+    font-family: 'VT323', monospace;
+    border: 1px solid #00ff66;
+    padding: 10px;
+
+    box-sizing: border-box;
+
+    display: flex;
+    flex-direction: column;
+
+    /* A fixed share of the screen (--CLI_HEIGHT), not "fill whatever is left".
+       flex-shrink lets it give way if the window is too short for it. */
+    flex: 0 1 var(--CLI_HEIGHT);
+    min-height: 0;
+
+    overflow: hidden;
+}
+
+/* The mobile menu is a full-screen overlay: there the terminal should fill it. */
+@media (max-width: 900px) {
+  .cli-interface {
+    flex: 1 1 0;
+  }
+}
+
+.cli-output {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+
+    flex: 1 1 0;
+    min-height: 0;
+
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.cli-line {
+  word-break: break-all;
+  font-size: 1.1rem;
+  line-height: 1.2;
+}
+
+/* Hide scrollbar for WebKit browsers (Chrome, Safari, Edge) */
+.cli-output::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.cli-input-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+
+.cli-line.user-cmd {
+  color: #ffffff;
+}
+
+.cli-line.error-msg {
+  color: #ff3333;
+}
+
+.cli-line.system-msg {
+  color: #00cc55;
+}
+
+.cmd-highlight {
+  color: #ffff00;
+}
+
+.cli-input-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  flex-shrink: 0; /* Keeps input height stable */
+}
+
+.cli-prompt {
+  color: #00ff66;
+  font-size: 1.2rem;
+  font-weight: bold;
+}
+
+#cliInput {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #00ff66;
+  font-family: 'VT323', monospace;
+  font-size: 1.2rem;
+  width: 100%;
+}

@@ -1,0 +1,448 @@
+<!-- ToyExchange Core explainer — a fragment loaded into the project panel by script.js.
+     Behavior: ToyExchangeCore.js (mount/unmount). Styles: shared/explainer.css. -->
+<div class="explainer">
+<header class="hero">
+  <div class="box">
+    <div class="kv"><span class="k">SUBTITLE:</span> <span class="v">The product-agnostic half of an exchange: sequenced ingress, replicated matching, epoch-fenced egress, and a measurement path</span></div>
+    <div class="kv"><span class="k">STATUS:</span> <span class="v warn">DRAFT — measurements not yet filled in</span></div>
+    <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.10.10</span></div>
+    <div class="kv"><span class="k">STACK:</span> <span class="v">C++20 · header-only CMake library · Linux (epoll, mmap, multicast, CLOCK_TAI) · HdrHistogram_c · googletest</span></div>
+    <div class="kv"><span class="k">SOURCE:</span>
+      <a href="https://github.com/infinite-simplex/ToyExchange" target="_blank">→ ToyExchange</a> &nbsp;
+      <a href="https://github.com/infinite-simplex/EventContractLOB" target="_blank">→ EventContractLOB (reference product)</a> &nbsp;
+      <a href="https://github.com/infinite-simplex/BatchGPU" target="_blank">→ BatchGPU (second product)</a>
+    </div>
+    <div class="kv"><span class="k">JUMP TO:</span> <a href="#overview">overview</a> · <a href="#order-path">order-path</a> · <a href="#fault-tolerance">fault-tolerance</a> · <a href="#telemetry">telemetry</a> · <a href="#performance">performance</a> · <a href="#results">results</a> · <a href="#limits">limits</a> · <a href="#build">build</a></div>
+    <div class="kv"><span class="k">OPEN TODOs:</span> <span class="v warn" id="todoCount">…</span></div>
+    <details id="todoIndex"><summary>list all placeholders</summary><ol id="todoList"></ol></details>
+  </div>
+</header>
+
+<!-- =====================================================================
+     OVERVIEW
+     ===================================================================== -->
+<h2 id="overview">OVERVIEW</h2>
+
+<p>
+  ToyExchange is the part of an exchange that doesn't care <em>what</em> is being traded. It takes bytes off a socket, puts every command into one global order,
+  replicates that order to several matching replicas, elects which replica may speak, fences out the ones that shouldn't, and measures how long each command took.
+  It does all of that without knowing whether the product on top is a limit order book, an auction, or something else. It is a portfolio project, not a production exchange.
+</p>
+<p>
+  The shape is borrowed from the <strong>LMAX Disruptor</strong>: every stage is a single thread that owns its data, and stages are joined by lock-free single-producer/single-consumer ring buffers,
+  so the hot path takes no locks. On top of that it adds what a Disruptor alone doesn't give you — a sequenced and replicated input, a leader-elected matching tier with real failover, and a measurement path.
+</p>
+
+<h3>What is in the repository</h3>
+<ul>
+  <li><strong><code>Core/</code></strong> — a header-only CMake library: ingress, egress, replica arbitration, the generic replica host, the SPSC queue, and telemetry.
+      Nothing in it names a price, a quantity or a wire protocol.</li>
+  <li><strong><code>PerformanceService/</code></strong> — <code>PerformanceServiceApp</code>, which turns every replica's per-command timing into HdrHistogram percentiles.</li>
+  <li><strong>No product logic.</strong> Products consume this repository as a dependency (CMake <code>FetchContent</code>, pinned to a release tag) rather than living inside it.</li>
+</ul>
+<p>
+  <strong>Products built on it:</strong>
+  <a href="#" data-project="EVENT CONTRACT LOB">EventContractLOB</a>, a limit order book for binary-outcome event contracts that speaks NASDAQ OUCH, is the reference product.
+  <a href="#" data-project="BATCH GPU">BatchGPU</a>, an hourly batch auction for GPU compute capacity, is the second: its engine holds the open batch and clears it when a sequenced <code>BATCH_CLEAR</code> command arrives,
+  and it adds its own recorders and a results API. Nothing here depends on either.
+</p>
+
+<figure class="fig" id="figTopology">
+  <div class="fig-head"><span class="id">FIG 1</span> System topology
+    <span class="spacer"></span>
+    <button class="btn" id="fig1Toggle" type="button">[ PAUSE ]</button>
+  </div>
+  <div class="fig-scroll">
+    <svg id="svg1" viewBox="0 0 980 480" role="img"
+         aria-label="Topology: clients connect over TCP to the network service, which multicasts sequenced commands over UDP to matching replicas; the leader's results return through an egress multicast to the egress gateway, which acks the client and publishes a public feed."></svg>
+  </div>
+  <div class="legend">
+    <span class="g"><i></i> command / private ack (TCP)</span>
+    <span class="b"><i></i> UDP multicast packet</span>
+    <span class="y"><i></i> heartbeat (UDP)</span>
+    <span class="w"><i></i> telemetry (UDP)</span>
+    <span class="r"><i></i> dropped / lost</span>
+  </div>
+  <figcaption>
+    <strong>Reading the figure.</strong> Lines are routed like traces on a chip; dots are messages. A big dot is one UDP datagram: the gateway sends
+    <em>one</em> replication datagram and the network fans it out to every replica. Replica 2 drains its output queue but never transmits it — only the leader does.
+    Animation speed is illustrative, not to scale.
+  </figcaption>
+</figure>
+
+<h3>What a product plugs in</h3>
+<p>Core is a set of templates. A product fills in these slots and gets the rest of the pipeline unchanged.</p>
+<div class="tscroll">
+<table class="spec wrapfirst">
+  <thead><tr><th>Core piece</th><th>What the product provides</th><th>EventContractLOB's answer</th><th>BatchGPU's answer</th></tr></thead>
+  <tbody>
+    <tr><td class="n">NetworkGateway&lt;<wbr>TProtocolHandler,<wbr> TCommand&gt;</td>
+        <td><code>validateAndParse(buf, len, cmd)</code> → bytes consumed, 0 if the frame is incomplete, or a fatal-error code (the gateway then closes that connection). The gateway stamps <code>trace_id</code> and <code>sessionId</code> onto the command.</td>
+        <td>OuchProtocolHandler, OuchOrderCommand</td>
+        <td>BatchProtocol<wbr>Handler, BatchCommand</td></tr>
+    <tr><td class="n">MatchingService&lt;<wbr>TCommand,<wbr> TEngine&gt;</td>
+        <td>A command with a <code>trace_id</code>, and an engine with <code>submit_order(TCommand&amp;)</code>. Core never looks inside. A continuous book applies each command at once; a batch-clearing engine stages orders and acts on a dedicated boundary command.</td>
+        <td>OrderBook (continuous matching)</td>
+        <td>BatchEngine (holds the open batch, clears on <code>BATCH_CLEAR</code>)</td></tr>
+    <tr><td class="n">SPSCProducerPolicy&lt;<wbr>TEvent&gt;</td>
+        <td>An event type. The engine reports results with <code>on_order_event()</code> and finished timing with <code>on_trace_complete()</code>.</td>
+        <td>OrderEvent</td>
+        <td>BatchEvent</td></tr>
+    <tr><td class="n">EgressGateway&lt;<wbr>TGateway,<wbr> TEvent,<wbr> TEncoder&gt;</td>
+        <td>A static <code>encode(event)</code> to wire bytes and a <code>print()</code> for the console. Events carry a <code>session_id</code> so the private ack can find its client.</td>
+        <td>OuchEventEncoder</td>
+        <td>BatchEvent<wbr>Encoder</td></tr>
+    <tr><td class="n">OrderTrace::ext_counters</td>
+        <td>Four opaque 32-bit counters per command. Core windows and reports them like any metric but assigns them no meaning.</td>
+        <td>LobExtSlot (two of the four in use)</td>
+        <td>GpuExtSlot (all four in use, on the clear's trace)</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- =====================================================================
+     ORDER PATH
+     ===================================================================== -->
+<h2 id="order-path">LIFE OF A COMMAND</h2>
+<p>What happens between a client's TCP <code>send()</code> and the acknowledgement coming back, in the order the code does it. Steps marked <em>(product)</em> are the slots above.</p>
+
+<ol>
+  <li><strong>Parse and validate <em>(product)</em>.</strong> The gateway's single ingress thread reads the socket via <code>epoll</code> and hands the bytes to the product's protocol handler.
+      A frame that cannot be interpreted closes the connection. A well-formed frame with bad content becomes a command the product marks invalid and later rejects, without dropping the connection.</li>
+  <li><strong>Sequence.</strong> The ingress thread stamps a monotonically increasing sequence number from a plain counter. The same number doubles as the telemetry trace id.
+      It also records the socket-read time and which client session sent the command.</li>
+  <li><strong>Append, then send.</strong> The sequenced message is written into a memory-mapped ring (<code>SequenceStore</code>) <em>before</em> it is multicast, so anything a replica
+      might miss can still be fetched afterwards.</li>
+  <li><strong>Fan out.</strong> One UDP multicast <code>sendto()</code> delivers the message to every replica.</li>
+  <li><strong>Receive and check.</strong> Each replica's receiver thread compares the sequence number with the one it expects. A gap triggers recovery (below).
+      In-order messages are pushed into the replica's inbound SPSC queue.</li>
+  <li><strong>Match <em>(product)</em>.</strong> The matching thread spins on that queue, pops a command, hands it to the engine, and records how far it has got (<code>lastAppliedSeq</code>).
+      Everything the engine reports becomes an event pushed into an output SPSC queue.</li>
+  <li><strong>Publish (leader only).</strong> Each replica's egress publisher drains that output queue. Only the replica that believes it is leader multicasts the event, wrapped in a
+      <code>FencedMessage</code> carrying its fencing epoch.</li>
+  <li><strong>Fence and deliver <em>(product encodes)</em>.</strong> The egress gateway discards any message whose epoch is older than the arbiter's current epoch. Survivors are encoded once and sent twice: privately
+      over the originating client's TCP connection (a no-op if that client has since left), and to the public broadcast group.</li>
+</ol>
+
+<!-- =====================================================================
+     FAULT TOLERANCE
+     ===================================================================== -->
+<h2 id="fault-tolerance">FAULT TOLERANCE</h2>
+<p>
+  The design goal is that a matching replica can die, or miss packets, without the exchange emitting duplicate or stale results — and without the survivors needing to be told anything.
+  Three mechanisms carry that: a shared sequenced input, gap recovery, and epoch-fenced leadership.
+</p>
+
+<h3>1 · One ordered input, many identical books</h3>
+<p>
+  Replicas never talk to each other. Each one applies the same sequenced command stream to its own engine, so their state follows from the input alone.
+  That puts one requirement on a product: its engine must behave as a function of the command stream. Anything that must affect every replica — a timed cancel, or <a href="#" data-project="BATCH GPU">BatchGPU</a>'s batch clear, say — has to enter through the
+  gateway like any other command rather than fire locally.
+</p>
+<div class="note"><b class="tag">SCOPE</b> The two-replica smoke test (a shell script in the reference product, run by hand) compares best bid/ask across replicas, not full state. <span class="todo">add a full-state equality check, or state the determinism argument you'd defend</span></div>
+
+<h3>2 · Losing packets: gap detection and retransmit</h3>
+<p>
+  UDP multicast is lossy, so every replica tracks the next sequence number it expects. When a higher one arrives it asks the gateway's retransmit server for the missing range over
+  a UDP request/response, pushes the recovered records into its queue in order, and only then processes the live message that revealed the gap. Requests are capped at 500 records per batch,
+  retried up to 3 times, with a 200 ms receive timeout.
+</p>
+<p>
+  The sequence store is a ring, so old entries get overwritten. If a range has been evicted the gap can never be filled, and the replica <strong>stops itself</strong> (exit code 2) rather than
+  keep running on state it knows is incomplete. It then stops heartbeating, and the arbiter drops it from leadership exactly as it would for a crash — no extra signalling path.
+</p>
+
+<figure class="fig" id="figGap">
+  <div class="fig-head"><span class="id">FIG 2</span> Gap-fill
+    <span class="spacer"></span>
+    <button class="btn" id="f3ok" type="button">[ PLAY: RECOVERABLE ]</button>
+    <button class="btn danger" id="f3bad" type="button">[ PLAY: EVICTED ]</button>
+  </div>
+  <div class="fig-scroll">
+    <svg id="svg3" viewBox="0 0 980 290" role="img"
+         aria-label="Animation: sequence 0 is lost, sequence 1 arrives, the replica detects a gap, requests sequence 0 from the retransmit server, and either recovers it or, if it was evicted, stops."></svg>
+  </div>
+  <div class="cli-log" id="log3"></div>
+  <figcaption>
+    <strong>Recoverable:</strong> the missing record is still in the ring, so it is pushed first and the live message follows — queue order is preserved.
+    <strong>Evicted:</strong> the server answers <code>TOO_OLD</code>, so the replica stops. Both paths have an automated test in the reference product.
+  </figcaption>
+</figure>
+
+<h3>3 · Leadership and fencing</h3>
+<p>
+  Every replica sends a heartbeat to the gateway's <code>ReplicaArbiter</code> every 2 ms, carrying its id and the last sequence number it applied. The arbiter replies with the current
+  <code>{epoch, leaderId}</code>. A replica is <em>eligible</em> to lead if its last heartbeat is fresh (default: within 10 ms) and it is no more than 200 sequence numbers behind the most advanced replica.
+  The current leader keeps the role while it stays eligible ("sticky"); otherwise the lowest-numbered eligible replica takes over.
+</p>
+<p>
+  The epoch is bumped on <em>every</em> leadership change, including to or from "nobody". Each published event carries the epoch its sender last heard, and the egress gateway — which lives in the
+  same process as the arbiter and reads the epoch directly — drops anything older than the current one. That is what makes a deposed leader's late packets harmless: it doesn't have to notice it lost the job, the sink refuses its traffic anyway.
+</p>
+
+<figure class="fig" id="figFailover">
+  <div class="fig-head"><span class="id">FIG 3</span> Failover and fencing
+    <span class="spacer"></span>
+    <button class="btn danger" id="f2kill" type="button">[ KILL LEADER ]</button>
+    <button class="btn" id="f2zombie" type="button" disabled>[ LATE PACKET FROM OLD LEADER ]</button>
+    <button class="btn" id="f2reset" type="button">[ RESET ]</button>
+  </div>
+  <div class="fig-scroll">
+    <svg id="svg2" viewBox="0 0 980 350" role="img"
+         aria-label="Animation: two replicas send heartbeats to the arbiter; the leader's events reach the egress gateway. Killing the leader stops its heartbeats, the arbiter promotes the other replica and increases the epoch, and a late packet with the old epoch is dropped at the egress gateway."></svg>
+  </div>
+  <div class="cli-log" id="log2"></div>
+  <figcaption>
+    <strong>Try it:</strong> kill the leader, then send a late packet from it. The arbiter only re-evaluates when a heartbeat arrives (it has no timer of its own), so takeover happens on the survivor's next heartbeat.
+    Timings in the animation are stretched for visibility — see the parameter table for the real defaults.
+  </figcaption>
+</figure>
+
+<h3>Parameters (defaults from the code, not measurements)</h3>
+<div class="tscroll">
+<table class="spec">
+  <thead><tr><th>What</th><th>Value</th><th>Where it comes from</th></tr></thead>
+  <tbody>
+    <tr><td>Heartbeat interval</td><td class="n">2 ms</td><td>replica → arbiter, UDP</td></tr>
+    <tr><td>Heartbeat reply timeout</td><td class="n">50 ms</td><td>a missed reply keeps the last known leader/epoch</td></tr>
+    <tr><td>Stale-after</td><td class="n">10 ms</td><td>arbiter default; a replica silent this long is ineligible</td></tr>
+    <tr><td>Lag tolerance</td><td class="n">200 sequence numbers</td><td>arbiter default; alive-but-behind replicas can't lead</td></tr>
+    <tr><td>Retransmit batch / attempts / timeout</td><td class="n">500 / 3 / 200 ms</td><td>receiver and retransmit server</td></tr>
+    <tr><td>Sequence store capacity</td><td class="n">2<sup>20</sup> = 1,048,576 slots</td><td>NetworkServiceApp default in the reference product; the ring's replay horizon</td></tr>
+    <tr><td>Inbound / event / trace queues</td><td class="n">1,024 / 16,384 / 16,384</td><td>per replica (SPSC ring capacities)</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>What is tested</h3>
+<ul>
+  <li><strong>Core's own suite — 11 tests.</strong> Replica arbitration (the first heartbeat becomes leader at epoch 1; leadership is sticky and a returning lower id doesn't bump the epoch; the epoch bumps on failover; the lowest eligible id wins),
+      the synced clock (matches wall time, monotonic), windowed histograms, aggregation (per-replica routing, incomplete timestamp pairs ignored), and one end-to-end forwarder → receiver → aggregator test over the wire.</li>
+  <li><strong>Through the reference product.</strong> Gap recovery via the real retransmit server, an unrecoverable gap stopping a replica, trace-arena collision detection, and the leader-gating of timed cancels are exercised by EventContractLOB's tests,
+      because Core has no protocol-agnostic stand-in for a command type. <span class="todo">add Core-level test doubles for the gateway, receiver and egress so this machinery is tested in this repository</span></li>
+</ul>
+
+<!-- =====================================================================
+     TELEMETRY
+     ===================================================================== -->
+<h2 id="telemetry">MEASURING IT</h2>
+<p>
+  Every command gets a 64-byte, cache-line-aligned <code>OrderTrace</code> record in a fixed arena of 2<sup>20</sup> slots (64 MiB), indexed by its sequence number. Four timestamps are written as the command moves through, and the matching thread
+  never does I/O for measurement: finished traces go into a queue and a separate thread forwards them over UDP.
+</p>
+
+<figure class="fig" id="figStamps">
+  <div class="fig-head"><span class="id">FIG 4</span> The four timestamps <span class="spacer"></span></div>
+  <div class="fig-scroll">
+    <svg id="svg4" viewBox="0 0 980 210" role="img"
+         aria-label="Timeline of one command through four timestamps and the three metrics between them."></svg>
+  </div>
+  <figcaption>
+    <strong>Not to scale.</strong> <code>EngineExecutionNs</code> is the primary metric: how long the engine's <code>submit_order()</code> took, unaffected by whether the command ends up resting.
+    Comparing timestamps taken on different machines is only meaningful if their clocks agree; the repository documents a software-PTP setup for that, but
+    <span class="todo">the PTP setup has not been run across two real hosts (the repo's own README says so) — verify before quoting NetworkDelayNs / QueuingDelayNs</span>
+  </figcaption>
+</figure>
+
+<h3>From trace to percentile</h3>
+<ul>
+  <li><strong>Every replica reports</strong> — leader or not — by unicast UDP to <code>PerformanceServiceApp</code>, wrapped with its replica id. Reports are deliberately not fenced by epoch: a standby's timing is exactly what you want to see.</li>
+  <li><strong>The aggregator</strong> computes the differences once, keeps one histogram per metric per replica, and rolls them over on a shared timer so replicas stay comparable window for window: 1-second windows, 60 retained, HdrHistogram underneath.
+      A trace with an incomplete timestamp pair is ignored rather than recorded as garbage.</li>
+  <li><strong>Resting commands report late.</strong> A trace completes when its command leaves the engine, so a long-resting order's sample can land many windows after it executed. The rolling view merges the retained windows to smooth that out.</li>
+</ul>
+<div class="tscroll">
+<table class="spec">
+  <thead><tr><th>Metric</th><th>Definition</th></tr></thead>
+  <tbody>
+    <tr><td class="n">EngineExecutionNs</td><td>match_done − engine_pop — the engine's own execution time (primary)</td></tr>
+    <tr><td class="n">NetworkDelayNs</td><td>replica_ingress − ingress — gateway socket read to the replica's receiver</td></tr>
+    <tr><td class="n">QueuingDelayNs</td><td>engine_pop − replica_ingress — time waiting in the inbound queue</td></tr>
+    <tr><td class="n">InboundQDepth</td><td>queue depth when the command was pushed</td></tr>
+    <tr><td class="n">InboundQSubmitCycles</td><td>local <code>rdtscp</code> cycles to push into the queue — a trend for one replica, never comparable across machines</td></tr>
+    <tr><td class="n">ExtCounter0…3</td><td>the four opaque product counters, windowed like everything else</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- =====================================================================
+     PERFORMANCE
+     ===================================================================== -->
+<h2 id="performance">PERFORMANCE: TRADING THINGS AWAY FOR LATENCY</h2>
+<p>
+  Every choice below buys lower or more predictable latency by giving something up. The costs are listed next to the benefits on purpose.
+  Where a claim would need a measurement, there is a yellow placeholder instead of a number. Choices that belong to one product's data structures live on that product's page.
+</p>
+
+<div class="cards">
+
+  <div class="card">
+    <h4>SPSC rings, cache-line separated</h4>
+    <p>Power-of-two capacity (mask, not modulo); head and tail each on their own 64-byte line; acquire/release atomics; no locks or CAS.</p>
+    <p class="buys"><span class="lbl">BUYS</span> Producer and consumer never contend on a cache line or a lock.</p>
+    <p class="costs"><span class="lbl">COSTS</span> Strictly one producer and one consumer per queue, so the pipeline is a chain of single-threaded stages. Capacity is fixed: a full queue stalls its producer.</p>
+    <p class="where">Core/SPSCQueue.hpp</p>
+  </div>
+
+  <div class="card">
+    <h4>Busy-polling matching thread</h4>
+    <p>The matching thread spins on <code>try_pop</code> with no sleep or yield.</p>
+    <p class="buys"><span class="lbl">BUYS</span> No wake-up latency when a command arrives.</p>
+    <p class="costs"><span class="lbl">COSTS</span> A core at 100% even when idle. The code does no CPU pinning or scheduler tuning. <span class="todo">measure idle CPU use and whether pinning changes tail latency</span></p>
+    <p class="where">Core/MatchingService.inl · poll()</p>
+  </div>
+
+  <div class="card">
+    <h4>Single writer at the front door</h4>
+    <p>One ingress thread assigns sequence numbers from a plain counter and is the only writer to the store.</p>
+    <p class="buys"><span class="lbl">BUYS</span> Ordering with no atomics, locks or coordination.</p>
+    <p class="costs"><span class="lbl">COSTS</span> Ingest throughput is bounded by one thread, and the gateway is a single point of failure (see limits).</p>
+    <p class="where">Core/Ingress/NetworkGateway.inl</p>
+  </div>
+
+  <div class="card">
+    <h4>Append first, then multicast once</h4>
+    <p>The message is written to the store before a single UDP datagram serves all replicas.</p>
+    <p class="buys"><span class="lbl">BUYS</span> Cost independent of replica count; nothing a replica misses is unrecoverable within the ring's horizon.</p>
+    <p class="costs"><span class="lbl">COSTS</span> UDP loses packets, so recovery logic is required, and history is bounded by the ring.</p>
+    <p class="where">NetworkGateway::pollSockets · SequenceStore</p>
+  </div>
+
+  <div class="card">
+    <h4>Seqlock slots in a memory-mapped ring</h4>
+    <p>Each slot carries a version counter (odd = being written). The retransmit thread reads without ever blocking the writer.</p>
+    <p class="buys"><span class="lbl">BUYS</span> The ingress writer never waits for a reader.</p>
+    <p class="costs"><span class="lbl">COSTS</span> A reader may retry (4 attempts) and, if contended, report the record as too old. The file is mapped with <code>MAP_POPULATE</code> and locked with a best-effort <code>mlock</code>.</p>
+    <p class="where">Core/Ingress/SequenceStore.hpp</p>
+  </div>
+
+  <div class="card">
+    <h4>Plain structs on internal channels</h4>
+    <p>Sequenced messages, heartbeats, retransmit requests and fenced events are fixed-size structs sent as raw bytes — no serialization layer.</p>
+    <p class="buys"><span class="lbl">BUYS</span> No encode/decode work between gateway and replicas.</p>
+    <p class="costs"><span class="lbl">COSTS</span> Those channels assume identical struct layout and byte order on every host. Explicit encoding is left to the product's own wire protocol.</p>
+    <p class="where">SequencedInboundMessage · FencedMessage</p>
+  </div>
+
+  <div class="card">
+    <h4>Telemetry off the critical path</h4>
+    <p>The matching thread only writes timestamps into its own arena slot; a separate thread forwards finished traces over UDP.</p>
+    <p class="buys"><span class="lbl">BUYS</span> Measurement adds a few stores and clock reads to the hot path, not I/O.</p>
+    <p class="costs"><span class="lbl">COSTS</span> If the trace queue is full the trace is dropped (engine events are never dropped). Every timestamp is a <code>clock_gettime</code> call.</p>
+    <p class="where">SPSCProducerPolicy · TelemetryForwarder</p>
+  </div>
+
+  <div class="card">
+    <h4>Two clocks</h4>
+    <p><code>rdtscp</code> for timings that stay on one machine; <code>CLOCK_TAI</code> for anything that may be compared across machines. TAI has no leap seconds, so it can't step backwards the way <code>CLOCK_REALTIME</code> occasionally does.</p>
+    <p class="buys"><span class="lbl">BUYS</span> Cheap local timing, and cross-machine deltas that don't go negative.</p>
+    <p class="costs"><span class="lbl">COSTS</span> Cross-machine numbers are only as good as the clock sync. The documented setup is software PTP, which the repository's README puts at tens of microseconds — and marks as not yet verified end to end.</p>
+    <p class="where">Core/Telemetry.hpp · Tools/ptp/</p>
+  </div>
+
+  <div class="card">
+    <h4>Opaque counters, not product fields</h4>
+    <p>Each trace reserves four 32-bit slots that Core carries and windows but never interprets. The product decides what slot 0 means.</p>
+    <p class="buys"><span class="lbl">BUYS</span> Core stays product-agnostic, and <code>PerformanceServiceApp</code> needs no per-product build. The slots fit inside padding the 64-byte record already had.</p>
+    <p class="costs"><span class="lbl">COSTS</span> Generic names (<code>ExtCounter0</code>…) in the output, a fixed count of four, and slot meanings documented on the product's side. The alternative — templating the trace on a product type — would have forced the aggregator to be built per product.</p>
+    <p class="where">OrderTrace · MetricKind::ExtCounter0…3</p>
+  </div>
+
+  <div class="card">
+    <h4>Cache-line-sized records</h4>
+    <p><code>OrderTrace</code> and each sequence-store slot are 64-byte aligned.</p>
+    <p class="buys"><span class="lbl">BUYS</span> One record per cache line; no false sharing between neighbours.</p>
+    <p class="costs"><span class="lbl">COSTS</span> A field change that crosses 64 bytes doubles the arena's footprint — the build fails on purpose when it happens (<code>static_assert</code> on <code>OrderTrace</code>).</p>
+    <p class="where">Telemetry.hpp · SequenceSlot.hpp</p>
+  </div>
+
+</div>
+
+<figure class="fig" id="figRing">
+  <div class="fig-head"><span class="id">FIG 5</span> SPSC ring buffer <span class="spacer"></span></div>
+  <div class="fig-scroll">
+    <svg id="svg5" viewBox="0 0 980 296" role="img"
+         aria-label="A ring of eight cells filled by a producer and drained by a consumer; head and tail counters live on separate cache lines."></svg>
+  </div>
+  <figcaption>
+    <strong>Illustrative capacity of 8.</strong> The real queues hold 1,024 (inbound) and 16,384 (events, traces). Head and tail are ever-growing counters; the slot is <code>counter &amp; (capacity−1)</code>, so wrap-around costs nothing.
+    Watch the producer stall when the ring is full.
+  </figcaption>
+</figure>
+
+<!-- =====================================================================
+     RESULTS
+     ===================================================================== -->
+<h2 id="results">RESULTS</h2>
+<p>
+  Nothing in this section has been measured yet — every number is a placeholder to be filled from real runs. The tool to collect them exists:
+  <code>PerformanceServiceApp</code> prints per-replica percentile tables once per window. Engine-side numbers (<code>EngineExecutionNs</code> and the product counters) belong to the product; see
+  <a href="#" data-project="EVENT CONTRACT LOB">EventContractLOB</a> and <a href="#" data-project="BATCH GPU">BatchGPU</a>.
+</p>
+
+<div class="tscroll">
+<table class="spec">
+  <thead><tr><th>Pipeline metric</th><th>p50</th><th>p99</th><th>p99.9</th><th>max</th></tr></thead>
+  <tbody>
+    <tr><td class="n">QueuingDelayNs</td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td></tr>
+    <tr><td class="n">NetworkDelayNs</td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td></tr>
+    <tr><td class="n">InboundQDepth</td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="tscroll">
+<table class="spec" style="margin-top:16px">
+  <thead><tr><th>Other figures</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td class="n">Sustained command rate (gateway / replica)</td><td><span class="todo">commands per second, and what limited it</span></td></tr>
+    <tr><td class="n">Failover: leader killed → survivor publishes</td><td><span class="todo">observed time; the 10 ms stale-after default is a configured detection window, not the measured recovery time</span></td></tr>
+    <tr><td class="n">Test hardware</td><td><span class="todo">CPU model, core count, RAM, and whether this is WSL or bare metal</span></td></tr>
+    <tr><td class="n">Topology of the run</td><td><span class="todo">single host or multiple hosts — decides whether the cross-machine metrics are valid</span></td></tr>
+    <tr><td class="n">Build</td><td>Release: <code>-O3 -march=native -mtune=native -Wall -Wextra -pthread</code>. Local build: GCC 11.4, CMake 3.22 (Ubuntu 22.04 on WSL).</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  <span class="todo">paste one representative PerformanceServiceApp window here, and note the load that produced it</span>
+</p>
+
+<!-- =====================================================================
+     LIMITS
+     ===================================================================== -->
+<h2 id="limits">KNOWN LIMITS</h2>
+<p>Things a careful reader would find, stated up front.</p>
+
+<div class="note limit"><b class="tag">SINGLE GATEWAY</b>
+  The sequencer, sequence store, retransmit server, arbiter and egress gateway all live in one process. Matching is replicated; the front door is not.</div>
+<div class="note limit"><b class="tag">STORE IS A BUFFER</b>
+  The sequence store is file-backed but is zeroed every time the gateway starts, and the sequence restarts at 0. It works as a bounded retransmit buffer for live replicas, not as crash-recovery storage.</div>
+<div class="note limit"><b class="tag">EGRESS HAS NO GAP-FILL</b>
+  The replica → egress-gateway multicast has no retransmit path, so a lost egress datagram is not recovered.</div>
+<div class="note limit"><b class="tag">RESTART / LATE JOIN</b>
+  A fresh replica starts by expecting sequence 0, so by construction it catches up through retransmit — but only while the gap still fits inside the ring (2<sup>20</sup> messages).
+  <span class="todo">test replica restart and late join; this is reasoning from the code, not a recorded result</span></div>
+<div class="note limit"><b class="tag">ELECTION MODEL</b>
+  Leadership is decided by a central arbiter with a fencing token, not by a consensus protocol among the replicas. The arbiter recomputes only when a heartbeat arrives.</div>
+<div class="note limit"><b class="tag">TRACE ARENA</b>
+  The arena has 2<sup>20</sup> slots. A command that rests long enough for the ring to wrap loses its timing record; a collision counter makes that visible but can't prevent it.</div>
+<div class="note limit"><b class="tag">CLOCKS</b>
+  Cross-machine timing depends on clock sync that has not been exercised across two real hosts yet.</div>
+<div class="note limit"><b class="tag">SCOPE</b>
+  One engine per replica process, and no measured performance claims yet.</div>
+
+<!-- =====================================================================
+     BUILD
+     ===================================================================== -->
+<h2 id="build">BUILD AND TEST</h2>
+<p>Linux only (it uses <code>epoll</code>, <code>mmap</code>, multicast sockets and <code>CLOCK_TAI</code> directly); on Windows, build under WSL. On its own this repository builds Core and the aggregator; to run a whole exchange you need a product on top —
+  <a href="#" data-project="EVENT CONTRACT LOB">EventContractLOB</a> has the launch scripts, and <a href="#" data-project="BATCH GPU">BatchGPU</a> lists the commands to start each program.</p>
+<pre class="code">cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j"$(nproc)"
+ctest --test-dir build --output-on-failure</pre>
+
+<footer>
+  DRAFT · this page makes no measurement claims; every yellow box is a number or check still owed.
+</footer>
+</div>

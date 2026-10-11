@@ -258,6 +258,10 @@
     color: var(--NEON_GREEN)
   }
 
+  .error-text {
+    color: var(--RED);
+  }
+
   #mainContent {
     opacity: 0;
     transition: opacity 1s;

@@ -216,6 +216,9 @@ const ProjectDisplay = {
             try { this._unmount(); } catch (error) { console.error('Error unmounting project:', error); }
             this._unmount = null;
         }
+        // Empty the panel too, so the next project never flashes the last one's markup while it loads.
+        const display = document.querySelector('#project_display');
+        if (display) display.innerHTML = '';
     },
 
     renderSpecificProject(project) {

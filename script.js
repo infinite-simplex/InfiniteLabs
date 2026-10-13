@@ -215,6 +215,28 @@ const ProjectDisplay = {
     _unmount: null,
     _loadToken: 0,
 
+    // Deep links: each project is addressable as #<htmlFile without .html>,
+    // e.g. #BatchGPU, so a README or resume can link straight to its write-up.
+    slugOf(project) {
+        return project.htmlFile.replace(/\.html$/, '');
+    },
+
+    setHash(slug) {
+        try {
+            history.replaceState(null, '', slug ? `#${slug}` : location.pathname + location.search);
+        } catch (error) { /* e.g. history disabled; deep links just won't update the URL */ }
+    },
+
+    // Opens the project named by the URL hash. Returns false if there isn't one.
+    openFromHash() {
+        const slug = decodeURIComponent(location.hash.slice(1)).toLowerCase();
+        if (!slug) return false;
+        const project = projectsData.projects.find(p => p.type !== 'corrupted' && this.slugOf(p).toLowerCase() === slug);
+        if (!project) return false;
+        this.renderSpecificProject(project);
+        return true;
+    },
+
     unmountCurrent() {
         this._loadToken++;
         if (this._unmount) {
@@ -228,6 +250,7 @@ const ProjectDisplay = {
 
     renderSpecificProject(project) {
         this.unmountCurrent();
+        this.setHash(this.slugOf(project));
         const token = this._loadToken;
         const projectDisplay = document.querySelector('#project_display');
 
@@ -401,8 +424,9 @@ const LoadingScreen = {
         if (loadingScreen) loadingScreen.classList.add('hidden');
         if (mainContent) mainContent.classList.add('visible');
 
-        // Automatically navigate to Projects page after bootup
-        Navigation.navigateToProjects();
+        // Automatically navigate to Projects page after bootup,
+        // or straight to a project if the URL names one (#BatchGPU)
+        if (!ProjectDisplay.openFromHash()) Navigation.navigateToProjects();
     }
 };
 
@@ -471,6 +495,7 @@ const Navigation = {
     navigateToProjects() {
         // Leaving a project: stop any animations it mounted.
         ProjectDisplay.unmountCurrent();
+        ProjectDisplay.setHash(null);
 
         // Deactivate all panels
         Object.values(this.panels).forEach(panel => {
@@ -714,6 +739,12 @@ document.addEventListener('click', (e) => {
     e.preventDefault();
     const project = projectsData.projects.find(p => p.title === link.dataset.project);
     if (project) ProjectDisplay.renderSpecificProject(project);
+});
+
+// Following or editing a #project link after the page has loaded
+window.addEventListener('hashchange', () => {
+    if (!document.querySelector('#mainContent.visible')) return; // still booting; completeLoading handles it
+    if (!ProjectDisplay.openFromHash()) Navigation.navigateToProjects();
 });
 
 // Initialize loading screen sequence

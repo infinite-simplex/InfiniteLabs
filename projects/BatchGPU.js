@@ -56,7 +56,6 @@ export function mount(root) {
 const R = createRuntime(root);
 const { $, el, Scene, sleep, travel, trace, node, label, frameBox, flash, xmark, REDUCED } = R;
 const { GREEN, BLUE, YEL, GRAYC, REDC } = R.colors;
-R.todoIndex();
 
 const clockText = h => { const m = Math.round(h * 60); return Math.floor(m / 60) + ':' + String(m % 60).padStart(2, '0'); };
 const mask = set => [...set].reduce((m, i) => m | 1 << i, 0);

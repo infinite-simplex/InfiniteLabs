@@ -30,7 +30,7 @@
 <header class="hero">
   <div class="box">
     <div class="kv"><span class="k">SUBTITLE:</span> <span class="v">An hourly batch auction for GPU compute, where one bid can accept many models, regions and hours, cleared to one price per item by integer network simplex</span></div>
-    <div class="kv"><span class="k">STATUS:</span> <span class="v warn">DRAFT — built, tested and measured, with one live telemetry run recorded</span></div>
+    <div class="kv"><span class="k">STATUS:</span> <span class="v">COMPLETE — built, tested and measured</span></div>
     <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.10.13</span></div>
     <div class="kv"><span class="k">STACK:</span> <span class="v">C++20 · min-cost flow by network simplex · built on ToyExchange Core v0.1.0 · SQLite (WAL) · googletest</span></div>
     <div class="kv"><span class="k">SOURCE:</span>
@@ -38,8 +38,6 @@
       <a href="#" data-project="TOY EXCHANGE CORE">→ ToyExchange Core, which it runs on (project)</a>
     </div>
     <div class="kv"><span class="k">JUMP TO:</span> <a href="#overview">overview</a> · <a href="#market">market</a> · <a href="#cycle">cycle</a> · <a href="#clear">clear</a> · <a href="#solver">solver</a> · <a href="#choices">choices</a> · <a href="#design">design</a> · <a href="#records">records</a> · <a href="#telemetry">telemetry</a> · <a href="#results">results</a> · <a href="#limits">limits</a> · <a href="#build">build</a></div>
-    <div class="kv"><span class="k">OPEN TODOs:</span> <span class="v warn" id="todoCount">…</span></div>
-    <details id="todoIndex"><summary>list all placeholders</summary><ol id="todoList"></ol></details>
   </div>
 </header>
 
@@ -644,6 +642,6 @@ curl localhost:8080/batches?limit=5
 curl localhost:8080/batches/205/prices</pre>
 
 <footer>
-  DRAFT · the numbers on this page come from the benchmarks, tests and runs named beside them.
+  The numbers on this page come from the benchmarks, tests and runs named beside them.
 </footer>
 </div>

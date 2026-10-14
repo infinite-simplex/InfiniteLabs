@@ -741,10 +741,23 @@ document.addEventListener('click', (e) => {
     if (project) ProjectDisplay.renderSpecificProject(project);
 });
 
+// In-page links inside an injected project page (its table of contents): scroll
+// to the section ourselves so the URL keeps naming the project (#BatchGPU)
+// instead of becoming #design, which would break the deep link.
+document.addEventListener('click', (e) => {
+    const link = e.target.closest('#project_display a[href^="#"]');
+    if (!link || link.dataset.project) return;
+    const id = decodeURIComponent(link.getAttribute('href').slice(1));
+    if (!id) return;
+    e.preventDefault();
+    const target = document.getElementById(id);
+    if (target) target.scrollIntoView();
+});
+
 // Following or editing a #project link after the page has loaded
 window.addEventListener('hashchange', () => {
     if (!document.querySelector('#mainContent.visible')) return; // still booting; completeLoading handles it
-    if (!ProjectDisplay.openFromHash()) Navigation.navigateToProjects();
+    ProjectDisplay.openFromHash(); // anything that isn't a project name is left alone
 });
 
 // Initialize loading screen sequence

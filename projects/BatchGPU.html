@@ -30,8 +30,8 @@
 <header class="hero">
   <div class="box">
     <div class="kv"><span class="k">SUBTITLE:</span> <span class="v">An hourly batch auction for GPU compute, where one bid can accept many models, regions and hours, cleared to one price per item by integer network simplex</span></div>
-    <div class="kv"><span class="k">STATUS:</span> <span class="v warn">DRAFT — built and tested; the live telemetry run is still owed</span></div>
-    <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.10.10</span></div>
+    <div class="kv"><span class="k">STATUS:</span> <span class="v warn">DRAFT — built, tested and measured, with one live telemetry run recorded</span></div>
+    <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.10.13</span></div>
     <div class="kv"><span class="k">STACK:</span> <span class="v">C++20 · min-cost flow by network simplex · built on ToyExchange Core v0.1.0 · SQLite (WAL) · googletest</span></div>
     <div class="kv"><span class="k">SOURCE:</span>
       <a href="https://github.com/infinite-simplex/BatchGPU" target="_blank">→ BatchGPU</a> &nbsp;
@@ -542,7 +542,7 @@ sink   ──▶ source the return arc, closing the loop: each unit through it e
      ===================================================================== -->
 <h2 id="results">RESULTS</h2>
 <p>
-  Clear times are measured. The live telemetry run, the whole exchange with Core's performance service listening, has not been recorded yet, so that part is a placeholder. Every batch is synthetic, on one machine and one compiler. “5 offered, 20 accepted” means each ask offers 5 items and each bid accepts 20.
+  Clear times are measured, and so is one live telemetry run: the whole exchange with Core's performance service listening, three runs on one machine. Every batch is synthetic, on one machine and one compiler. “5 offered, 20 accepted” means each ask offers 5 items and each bid accepts 20.
 </p>
 
 <div class="tscroll">
@@ -562,12 +562,29 @@ sink   ──▶ source the return arc, closing the loop: each unit through it e
   <thead><tr><th>Other figures</th><th>Value</th></tr></thead>
   <tbody>
     <tr><td class="n">Memory</td><td>a clear at the arc limit adds about 100 MB at its peak, and the process is about 110 MB with the order book</td></tr>
-    <tr><td class="n">Live telemetry window</td><td><span class="todo">paste one representative PerformanceServiceApp window here, and note the load that produced it</span></td></tr>
-    <tr><td class="n">When a clear is too slow</td><td><span class="todo">choose thresholds for the clear's time and for the queue behind it, once the live run gives real clear times</span></td></tr>
+    <tr><td class="n">Live telemetry window</td><td>one window of the whole exchange under a full batch, below. The clear took 0.43 to 0.85 s on a replica over three runs (10,000 bids, the cap)</td></tr>
+    <tr><td class="n">When a clear is too slow</td><td><strong>Look</strong> when a clear takes over 1 s, or its trace does not arrive: Core's histogram stops at about 1.07 s and drops what is longer, uncounted. <strong>Act</strong> when it needs over 1,000,000 pivots, a quarter of the budget and the most Core's counter can show; the run above needed 198,387. A clear holds the queue behind it, so an order waits as long as the clear does and the same 1 s covers the queuing delay. The queue's own limit is 1,024 commands: <strong>look</strong> at 512 and <strong>act</strong> at 1,024, where the run lost orders (see Known limits). These are chosen from three runs on one machine, not tuned.</td></tr>
     <tr><td class="n">Test machine</td><td>AMD Ryzen 7 5800X, Ubuntu 22.04 on WSL2, GCC 11.4, <code>-O3 -march=native</code>; one thread per solve</td></tr>
   </tbody>
 </table>
 </div>
+
+<h3>One telemetry window: the clear</h3>
+<p>
+  The load: 10,000 bids from 500 buyers and 7,500 asks (each ask offers 5 items, each bid accepts 20; synthetic, <code>Bench/gen_load.py</code>, 272,281 arcs), sent by one client over TCP to the gateway, then a <code>BATCH_CLEAR</code>, then 2,500 more orders straight behind it. The gateway, two replicas, the recorder and the performance service ran on one machine, so the three engines solved the same batch at once. <code>Bench/telemetry_run.sh</code> reproduces it.
+  This is the one-second window that holds the clear, as replica 1 reported it. Times are nanoseconds.
+</p>
+<pre class="code">[perf] replica=1 metric=engine_exec_ns          n=1247 min=170  max=431226879 p50=270       p99=490
+[perf] replica=1 metric=queuing_delay_ns        n=1247 min=1015 max=430440447 p50=387710975 p99=429654015
+[perf] replica=1 metric=inbound_q_depth         n=1247 min=1    max=1031      p50=623       p99=1019
+[perf] replica=1 metric=ext_counter_0 (lifted)  n=1247 min=0    max=28159     p50=0
+[perf] replica=1 metric=ext_counter_1 (filled)  n=1247 min=0    max=7519      p50=0
+[perf] replica=1 metric=ext_counter_2 (unfilled) n=1247 min=0   max=2527      p50=0
+[perf] replica=1 metric=ext_counter_3 (pivots)  n=1247 min=0    max=198655    p50=0</pre>
+<p>
+  <strong>Reading it.</strong> The 1,247 commands are the clear and the 1,246 orders that reached the replica behind it. The clear is the maximum of <code>engine_exec_ns</code> (431 ms; replica 2 took 427 ms); admitting an order takes about 270 ns at the median. The counters ride on the clear's trace alone, so only their maximum means anything: 28,159 units lifted, 7,519 bids filled, 2,527 unfilled, 198,655 pivots. The histogram rounds up to a bucket edge, and the recorder holds the exact figures (198,387 pivots, 28,098 lifted).
+  The orders behind the clear waited for it: a median queuing delay of 388 ms and a queue 1,031 deep, which is the queue's capacity of 1,024 as the histogram rounds it up. Without the clear in the window, 14,000 orders in a second show a median of about 1 µs in the engine and a p99 under 10 µs.
+</p>
 
 <p>
   <strong>Caveat.</strong> Time grows faster than linearly (about the 1.3th to 1.8th power of batch size across these families) and is not measured beyond the 10,000-order cap. A shape not tried could do worse; what protects the clear is the pivot budget, not the benchmarks.
@@ -585,6 +602,8 @@ sink   ──▶ source the return arc, closing the loop: each unit through it e
   Core v0.1.0's sequenced log does not survive a gateway restart, so the orders waiting for a clear are lost, and a replica can rejoin only while the gateway's ring still holds the first command. A new solver build is a planned down window right after a clear.</div>
 <div class="note limit"><b class="tag">REPORTING IS BEST EFFORT</b>
   Replica-to-gateway UDP has no gap-fill, so a clear that emits more than about 240 events loses the end of them on the way to clients; every result is in the recorders' files and the API. Telemetry is UDP too, and its histograms stop at about 1.07 s and 1,000,000: a longer clear or a larger count is dropped, uncounted.</div>
+<div class="note limit"><b class="tag">A BURST BEHIND A CLEAR IS LOST UNTIL THE NEXT COMMAND</b>
+  A replica's inbound queue holds 1,024 commands, and the clear holds it for as long as it runs. In the telemetry run the queue filled, and 1,254 of the 2,500 orders sent right behind the clear reached neither replica; most likely the receiver waited for room while its socket buffer overflowed. A replica learns it missed a command only when a later one arrives, and then it fills the gap, so they were recovered by the next command. Until then they are not in the batch.</div>
 <div class="note limit"><b class="tag">SINGLE GATEWAY</b>
   The ticker, sequencer, retransmit server, arbiter and egress gateway share one process. Matching and recording are replicated; the front door is not.</div>
 <div class="note limit"><b class="tag">A TOY MARKET</b>
@@ -609,12 +628,15 @@ Bench/run_sweep.sh                 # every cell killed after 30 s, reported as "
 GEN=realistic Bench/run_sweep.sh   # the same sweep on ERCOT-calibrated batches</pre>
 <p>
   Start the replicas and the recorder, then the gateway. The gateway's ticker sends a clear as soon as it starts and then one at half past each hour; <code>--no-ticker</code> leaves the clears to a client.
-  There is no order-entry client: <code>NetworkService/BatchWire.hpp</code> has the frames a client sends, and <code>Tests/ExchangeTests.cpp</code> is a working one.
+  <code>Client/BatchClient</code> is a small command-line order-entry client. It stays connected from the order to the clear, because results go back to the connection that sent the order, and it prints every event that arrives.
+  To see a batch clear without waiting for the half hour, start the gateway with <code>--no-ticker</code> and run the client's <code>demo</code> command, which enters an ask and three bids and clears them. With the ticker on, leave out <code>--batch</code>: the open batch follows the clock. The client is not covered by the tests.
+  The frames it sends are in <code>NetworkService/BatchWire.hpp</code>.
 </p>
 <pre class="code">build/MatchingService/MatchingServiceApp --replica-id 1
 build/MatchingService/MatchingServiceApp --replica-id 2     # optional: only the leader publishes
 build/Recorder/RecorderApp --db results.sqlite
-build/NetworkService/NetworkServiceApp
+build/NetworkService/NetworkServiceApp                      # add --no-ticker to clear by hand
+build/Client/BatchClient --batch 0                          # with --no-ticker; then type: demo
 
 build/ResultsApi/ResultsApiApp --db results.sqlite
 curl localhost:8080/status
@@ -622,6 +644,6 @@ curl localhost:8080/batches?limit=5
 curl localhost:8080/batches/205/prices</pre>
 
 <footer>
-  DRAFT · the numbers on this page come from the benchmarks and tests named beside them; every yellow box is a run or a check still owed.
+  DRAFT · the numbers on this page come from the benchmarks, tests and runs named beside them.
 </footer>
 </div>

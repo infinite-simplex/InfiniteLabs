@@ -153,9 +153,11 @@
 
 <h3>2 · Losing packets: gap detection and retransmit</h3>
 <p>
-  UDP multicast is lossy, so every replica tracks the next sequence number it expects. When a higher one arrives it asks the gateway's retransmit server for the missing range over
+  UDP multicast is lossy, and on one host the usual cause is the kernel's receive buffer. A burst can fill the default 212,992 bytes while the receiver waits for room in a full queue, so the receiver asks for 4 MiB.
+  That makes gaps rarer. It does not remove them, so recovery stays. Every replica tracks the next sequence number it expects. When a higher one arrives it asks the gateway's retransmit server for the missing range over
   a UDP request/response, pushes the recovered records into its queue in order, and only then processes the live message that revealed the gap. Requests are capped at 500 records per batch. A batch that comes back short is retried up to 3 times,
-  and each retry asks only for the records still missing, so nothing is delivered twice.
+  and each retry asks only for the records still missing, so nothing is delivered twice. Every reply carries its own sequence number, and the replica uses only the reply for the record it still needs.
+  A lost, repeated or late reply is ignored, so it can never take another record's place.
 </p>
 <p>
   A live message is not the only way to find out. If a replica hears nothing for a full 200 ms receive timeout, it asks the same server for everything from its position onward;
@@ -226,6 +228,7 @@
     <tr><td>Lag tolerance</td><td class="n">200 sequence numbers</td><td>arbiter default; alive-but-behind replicas can't lead</td></tr>
     <tr><td>Retransmit batch / attempts / timeout</td><td class="n">500 / 3 / 200 ms</td><td>receiver and retransmit server</td></tr>
     <tr><td>Idle probe</td><td class="n">after 200 ms of silence · 1 attempt</td><td>receiver, on its receive timeout; <code>NetworkConfig::ingressIdleProbe</code> turns it off</td></tr>
+    <tr><td>Ingress receive buffer</td><td class="n">4 MiB requested</td><td>receiver, on the multicast socket and the retransmit-reply socket; <code>NetworkConfig::ingressReceiveBufferBytes</code>. Linux caps the request at <code>net.core.rmem_max</code> (default 212,992 bytes), so raise that sysctl on the host. The receiver prints a warning at start-up when the cap clips the request</td></tr>
     <tr><td>Sequence store capacity</td><td class="n">2<sup>20</sup> = 1,048,576 slots</td><td>NetworkServiceApp default in the reference product; the ring's replay horizon</td></tr>
     <tr><td>Inbound / event / trace queues</td><td class="n">1,024 / 16,384 / 16,384</td><td>per replica (SPSC ring capacities)</td></tr>
   </tbody>
@@ -234,11 +237,12 @@
 
 <h3>What is tested</h3>
 <ul>
-  <li><strong>Core's own suite — 21 tests.</strong> Replica arbitration (the first heartbeat becomes leader at epoch 1; leadership is sticky and a returning lower id doesn't bump the epoch; the epoch bumps on failover; the lowest eligible id wins),
+  <li><strong>Core's own suite — 27 tests.</strong> Replica arbitration (the first heartbeat becomes leader at epoch 1; leadership is sticky and a returning lower id doesn't bump the epoch; the epoch bumps on failover; the lowest eligible id wins),
       the synced clock (matches wall time, monotonic), windowed histograms, aggregation (per-replica routing, incomplete timestamp pairs ignored), one end-to-end forwarder → receiver → aggregator test over the wire,
-      and ten ingress-recovery tests. Those run the real sequence store, retransmit server and multicast receiver with a stand-in command type: late join and restart replay the full history in order;
-      a joiner catches up while the newest sequence number is at most capacity − 1, and one more message evicts sequence 0 and stops the replica; a retry after a partly lost reply neither duplicates nor skips records;
-      duplicated, late and reordered datagrams are applied once; and the idle probe catches up a late joiner, or the lost tail of a burst, with no live message, stops on evicted history, and survives an unreachable server.
+      and sixteen ingress-recovery tests. Those run the real sequence store, retransmit server and multicast receiver with a stand-in command type: late join and restart replay the full history in order;
+      a joiner catches up while the newest sequence number is at most capacity − 1, and one more message evicts sequence 0 and stops the replica; a fake retransmit server that drops the end of a reply,
+      drops records in the middle of a reply, or sends every reply twice never makes the replica duplicate, skip or reorder a record;
+      duplicated, late and reordered live datagrams are applied once; and the idle probe catches up a late joiner, or the lost tail of a burst, with no live message, resumes at a record lost mid-reply, stops on evicted history, and survives an unreachable server; the receiver applies the configured 4 MiB receive buffer, and a request that the kernel cap clips is reported as clipped.
       The tests use small rings (1,024 slots) to stay fast; the boundary is the same arithmetic at 2<sup>20</sup>.</li>
   <li><strong>Through the reference product.</strong> The gateway end to end over a real wire protocol, trace-arena collision detection, and the leader-gating of timed cancels are exercised by EventContractLOB's tests,
       which also repeat gap recovery with a real command type. Core has no stand-in for the gateway's protocol handler or for the egress event and encoder.

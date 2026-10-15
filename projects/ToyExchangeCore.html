@@ -113,7 +113,8 @@
       It also records the socket-read time and which client session sent the command.</li>
   <li><strong>Append, then send.</strong> The sequenced message is written into a memory-mapped ring (<code>SequenceStore</code>) <em>before</em> it is multicast, so anything a replica
       might miss can still be fetched afterwards.</li>
-  <li><strong>Fan out.</strong> One UDP multicast <code>sendto()</code> delivers the message to every replica.</li>
+  <li><strong>Fan out.</strong> One UDP multicast <code>sendto()</code> carries every command the gateway parsed in the same pass of its loop, up to one datagram's worth (1,400 bytes by default), and delivers them to every replica.
+      Nothing waits for a datagram to fill: a command that arrives alone goes out at once, in a datagram of its own. The batch grows only when commands arrive faster than the gateway sends.</li>
   <li><strong>Receive and check.</strong> Each replica's receiver thread compares the sequence number with the one it expects. A gap triggers recovery (below),
       and a number older than expected is a duplicate and is dropped. In-order messages are pushed into the replica's inbound SPSC queue.</li>
   <li><strong>Match <em>(product)</em>.</strong> The matching thread spins on that queue, pops a command, hands it to the engine, and records how far it has got (<code>lastAppliedSeq</code>).
@@ -136,9 +137,17 @@
 <h3>1 · One ordered input, many identical books</h3>
 <p>
   Replicas never talk to each other. Each one applies the same sequenced command stream to its own engine, so their state follows from the input alone.
-  That puts one requirement on a product: its engine must behave as a function of the command stream. Anything that must affect every replica — a timed cancel, or <a href="#" data-project="BATCH GPU">BatchGPU</a>'s batch clear, say — has to enter through the
-  gateway like any other command rather than fire locally.
 </p>
+<div class="note"><b class="tag">RULE</b> Every product built on Core must be deterministic. The same command stream, applied in order from sequence 0, must give the same state and the same events on every replica.
+  Core relies on this for replay (late join and restart) and for failover without any hand-over of state. A product keeps the rule by following five points.
+  <ul>
+    <li>Nothing that affects state depends on hash-container order, pointer values or randomness.</li>
+    <li>Nothing that affects state depends on a floating-point result that can differ between hosts.</li>
+    <li>A clock reading may stamp an emitted event. It must never feed back into state.</li>
+    <li>The command stream is the only input. Anything that must affect every replica — a timed cancel, or <a href="#" data-project="BATCH GPU">BatchGPU</a>'s batch clear, say — enters through the gateway as a sequenced command and does not fire locally.</li>
+    <li>A command that makes the engine throw must throw on every replica.</li>
+  </ul>
+</div>
 <p><strong>Why the books match.</strong> The argument has two halves.</p>
 <ul>
   <li><strong>Same input.</strong> The gateway fixes one total order, and each replica applies it from sequence 0, once and in order. Gaps are filled by retransmit before the live message is processed,
@@ -156,8 +165,9 @@
   UDP multicast is lossy, and on one host the usual cause is the kernel's receive buffer. A burst can fill the default 212,992 bytes while the receiver waits for room in a full queue, so the receiver asks for 4 MiB.
   That makes gaps rarer. It does not remove them, so recovery stays. Every replica tracks the next sequence number it expects. When a higher one arrives it asks the gateway's retransmit server for the missing range over
   a UDP request/response, pushes the recovered records into its queue in order, and only then processes the live message that revealed the gap. Requests are capped at 500 records per batch. A batch that comes back short is retried up to 3 times,
-  and each retry asks only for the records still missing, so nothing is delivered twice. Every reply carries its own sequence number, and the replica uses only the reply for the record it still needs.
-  A lost, repeated or late reply is ignored, so it can never take another record's place.
+  and each retry asks only for the records still missing, so nothing is delivered twice. A reply is a few datagrams, each holding a small header and as many whole records as fit in 1,400 bytes, not one datagram per record.
+  The header names the first sequence number in the datagram, and the replica uses only the records from the next one it needs. A lost, repeated, late or partly stale datagram is ignored or trimmed,
+  so it can never take another record's place.
 </p>
 <p>
   A live message is not the only way to find out. If a replica hears nothing for a full 200 ms receive timeout, it asks the same server for everything from its position onward;
@@ -225,9 +235,11 @@
     <tr><td>Heartbeat interval</td><td class="n">2 ms</td><td>replica → arbiter, UDP</td></tr>
     <tr><td>Heartbeat reply timeout</td><td class="n">50 ms</td><td>a missed reply keeps the last known leader/epoch</td></tr>
     <tr><td>Stale-after</td><td class="n">10 ms</td><td>arbiter default; a replica silent this long is ineligible</td></tr>
-    <tr><td>Lag tolerance</td><td class="n">200 sequence numbers</td><td>arbiter default; alive-but-behind replicas can't lead</td></tr>
+    <tr><td>Lag window</td><td class="n">20 ms</td><td>arbiter default; a replica that has not reached the highest sequence number any replica reported 20 ms ago cannot lead. Measured in time, because a count of commands cannot hold at every rate: at 500,000 commands/s two caught-up replicas that heartbeat 2 ms apart already differ by about 1,000</td></tr>
     <tr><td>Retransmit batch / attempts / timeout</td><td class="n">500 / 3 / 200 ms</td><td>receiver and retransmit server</td></tr>
     <tr><td>Idle probe</td><td class="n">after 200 ms of silence · 1 attempt</td><td>receiver, on its receive timeout; <code>NetworkConfig::ingressIdleProbe</code> turns it off</td></tr>
+    <tr><td>Datagram size limit</td><td class="n">1,400 bytes</td><td>gateway fan-out and retransmit replies; <code>NetworkConfig::ingressDatagramMaxBytes</code>. Whole records only, at least one. Stay under the path MTU minus 28 bytes, or the network fragments the datagram</td></tr>
+    <tr><td>Receiver spin window</td><td class="n">0 µs (off)</td><td>receiver; <code>NetworkConfig::ingressSpinMicros</code>. A product that must sustain a very high rate with several replicas on one host sets it (50 to 100 is a start). After each datagram the receiver polls for that long before it blocks, so a sender does not pay to wake it. Costs one busy thread per replica while traffic flows; an idle receiver never spins</td></tr>
     <tr><td>Ingress receive buffer</td><td class="n">4 MiB requested</td><td>receiver, on the multicast socket and the retransmit-reply socket; <code>NetworkConfig::ingressReceiveBufferBytes</code>. Linux caps the request at <code>net.core.rmem_max</code> (default 212,992 bytes), so raise that sysctl on the host. The receiver prints a warning at start-up when the cap clips the request</td></tr>
     <tr><td>Sequence store capacity</td><td class="n">2<sup>20</sup> = 1,048,576 slots</td><td>NetworkServiceApp default in the reference product; the ring's replay horizon</td></tr>
     <tr><td>Inbound / event / trace queues</td><td class="n">1,024 / 16,384 / 16,384</td><td>per replica (SPSC ring capacities)</td></tr>
@@ -237,16 +249,22 @@
 
 <h3>What is tested</h3>
 <ul>
-  <li><strong>Core's own suite — 27 tests.</strong> Replica arbitration (the first heartbeat becomes leader at epoch 1; leadership is sticky and a returning lower id doesn't bump the epoch; the epoch bumps on failover; the lowest eligible id wins),
+  <li><strong>Core's own suite — 46 tests.</strong> Replica arbitration (the first heartbeat becomes leader at epoch 1; leadership is sticky and a returning lower id doesn't bump the epoch; the epoch bumps on failover; the lowest eligible id wins;
+      healthy replicas that report at different moments at 500,000 commands/s do not demote the leader; a leader that stops advancing loses leadership only after a full lag window),
       the synced clock (matches wall time, monotonic), windowed histograms, aggregation (per-replica routing, incomplete timestamp pairs ignored), one end-to-end forwarder → receiver → aggregator test over the wire,
-      and sixteen ingress-recovery tests. Those run the real sequence store, retransmit server and multicast receiver with a stand-in command type: late join and restart replay the full history in order;
+      seven gateway tests, and twenty-six ingress-recovery tests. The gateway tests run the real gateway, receiver and sequence store with a stand-in wire protocol: commands reach a replica in order and are stored;
+      a frame split across reads parses once; each connection gets its own session id; a broken frame closes the connection but earlier frames stay sequenced; every record is in the store before its datagram reaches the network;
+      commands from one read share few datagrams; and a command that arrives alone is sent at once, never held for others.
+      The ingress-recovery tests run the real sequence store, retransmit server and multicast receiver with a stand-in command type: a datagram of many records behaves like many datagrams of one
+      (records already delivered are skipped, a datagram that starts past the next expected record recovers the gap first, a torn datagram is dropped); the retransmit server answers a range in few datagrams and ends it with one status datagram;
+      a receiver with a spin window delivers in order, still sleeps after a quiet spell, and still probes when idle; late join and restart replay the full history in order;
       a joiner catches up while the newest sequence number is at most capacity − 1, and one more message evicts sequence 0 and stops the replica; a fake retransmit server that drops the end of a reply,
-      drops records in the middle of a reply, or sends every reply twice never makes the replica duplicate, skip or reorder a record;
+      drops datagrams in the middle of a reply, sends every reply twice, or sends a stale datagram that overlaps the next needed record never makes the replica duplicate, skip or reorder a record;
       duplicated, late and reordered live datagrams are applied once; and the idle probe catches up a late joiner, or the lost tail of a burst, with no live message, resumes at a record lost mid-reply, stops on evicted history, and survives an unreachable server; the receiver applies the configured 4 MiB receive buffer, and a request that the kernel cap clips is reported as clipped.
       The tests use small rings (1,024 slots) to stay fast; the boundary is the same arithmetic at 2<sup>20</sup>.</li>
   <li><strong>Through the reference product.</strong> The gateway end to end over a real wire protocol, trace-arena collision detection, and the leader-gating of timed cancels are exercised by EventContractLOB's tests,
-      which also repeat gap recovery with a real command type. Core has no stand-in for the gateway's protocol handler or for the egress event and encoder.
-      <span class="todo">add Core-level test doubles for the gateway and egress so that machinery is tested in this repository</span></li>
+      which also repeat gap recovery with a real command type. Core has no stand-in for the egress event and encoder.
+      <span class="todo">add a Core-level test double for the egress so that machinery is tested in this repository</span></li>
 </ul>
 
 <!-- =====================================================================

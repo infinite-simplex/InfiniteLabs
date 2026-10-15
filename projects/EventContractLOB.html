@@ -251,7 +251,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
 <h2 id="results">RESULTS</h2>
 <p>
   Engine-side numbers only; queuing, network and failover figures are on the
-  <a href="#" data-project="TOY EXCHANGE CORE">Core page</a>. <strong>One machine:</strong> AMD Ryzen 7 5800X (16 threads), Ubuntu 22.04 on WSL2, GCC 11.4 at <code>-O3 -march=native</code>, Core v0.2.0. The gateway, two replicas, performance service and load generator all share that host over loopback, with no CPU pinning.
+  <a href="#" data-project="TOY EXCHANGE CORE">Core page</a>. <strong>One machine:</strong> AMD Ryzen 7 5800X (16 threads), Ubuntu 22.04 on WSL2, GCC 11.4 at <code>-O3 -march=native</code>, Core v0.2.1. The gateway, two replicas, performance service and load generator all share that host over loopback, with no CPU pinning.
 </p>
 
 <h3>Under load</h3>
@@ -262,14 +262,14 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
 <table class="spec">
   <thead><tr><th>Metric</th><th>p50</th><th>p99</th><th>p99.99</th><th>max</th></tr></thead>
   <tbody>
-    <tr><td class="n">EngineExecutionNs</td><td>170 ns (160–170)</td><td>535 ns (500–540)</td><td>10.9 µs (9.6–17.3)</td><td>53 µs (34 µs–1.2 ms)</td></tr>
+    <tr><td class="n">EngineExecutionNs</td><td>85 ns (85–90)</td><td>440 ns (420–445)</td><td>1.4 µs (1.2–8.0)</td><td>43 µs (34 µs–0.93 ms)</td></tr>
     <tr><td class="n">ExtCounter0 (price levels touched)</td><td>0</td><td>5</td><td>7</td><td>10</td></tr>
     <tr><td class="n">ExtCounter1 (resting orders touched)</td><td>0</td><td>7</td><td>11</td><td>14</td></tr>
   </tbody>
 </table>
 </div>
 <p>
-  The tail is the machine's: p99.99 and max move by an order of magnitude between runs of identical input, and the 1.2 ms came from one run. At 25,000 orders a second the medians were similar (p50 140 ns, p99 490 ns). In the three runs both replicas reported the same number of traces.
+  The tail is the machine's: p99.99 and max move several-fold between runs of identical input, and the 0.93 ms came from one run. One 30-second run at 50,000 orders a second gave p50 75 ns and p99 350 ns.
 </p>
 
 <h3>One level, in process</h3>
@@ -328,7 +328,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
 </ul>
 <p>
   <strong>By hand:</strong> <code>Tools/two_replica_smoke_test.sh</code> runs a gateway and two replicas and checks that the books converge, that exactly one replica publishes, that the epoch strictly increases after killing the leader,
-  and that the survivor's output still arrives. It is not part of CI. A run on Core v0.2.0 (2026-10-14):
+  and that the survivor's output still arrives. It is not part of CI. A run on Core v0.2.1 (2026-10-15):
 </p>
 <pre class="code">Book state converged -> best bid=40 best ask=60
 PASS: exactly one replica published egress (4 lines for 3 orders / 1 trade)
@@ -354,7 +354,7 @@ PASS: failover complete, survivor's egress reached the gateway (5 total egress l
 <div class="note limit"><b class="tag">EGRESS FORMAT</b>
   The public feed is a custom compact frame, not ITCH, and the <code>DELETED</code> event type is declared but never emitted (a full cancel reports <code>CANCELED</code> with nothing left).</div>
 <div class="note limit"><b class="tag">MEASUREMENTS</b>
-  Everything was measured on one machine over loopback under WSL2, without CPU pinning, so p99.99 and max include the host's scheduling noise. The stack held 10,000 and 25,000 orders a second cleanly, and nothing is claimed above that. Past about 30,000 with two replicas the pipeline is the limit, not the engine (which sustains 4.8 to 19 million orders a second on its own): the gateway sends one UDP datagram per command and pays for every receiver (150,000 or more orders a second with none listening, 66,000 with one replica, 38,000 with two); the arbiter changes leader whenever a replica falls 200 commands behind; and in Core v0.2.0 a lost retransmit reply is applied as the wrong command, so replicas can end with different books. <code>Tools/load_test.sh</code> compares a digest of each replica's whole book to catch that. The order-token table holds 2,097,152 tokens for the life of a process, and the gateway crawls once it is full.</div>
+  Everything was measured on one machine over loopback under WSL2, without CPU pinning, so p99.99 and max include the host's scheduling noise. On Core v0.2.1 the stack took 10,000 and 50,000 orders a second with no sequence gap, no leader change and identical books on both replicas (<code>Tools/load_test.sh</code> compares a digest of each replica's whole book). At 100,000 and 200,000 a second, and in a 4-second run at about 460,000, the books were still identical and no gap needed repair, but the leader changed 62, 106 and 78 times; the cause is not yet traced, so nothing is claimed above 50,000. The engine is not the limit: on its own it sustains 4.8 to 19 million orders a second. The order-token table holds 2,097,152 tokens for the life of a process, and the gateway crawls once it is full, so the high-rate runs were short.</div>
 
 <!-- =====================================================================
      REPRODUCE

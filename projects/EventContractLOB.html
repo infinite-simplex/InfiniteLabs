@@ -5,8 +5,8 @@
 <header class="hero">
   <div class="box">
     <div class="kv"><span class="k">SUBTITLE:</span> <span class="v">A limit order book for binary-outcome event contracts (prices 0–100), speaking NASDAQ OUCH 4.2</span></div>
-    <div class="kv"><span class="k">STATUS:</span> <span class="v warn">DRAFT — measurements not yet filled in</span></div>
-    <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.09.29</span></div>
+    <div class="kv"><span class="k">STATUS:</span> <span class="v warn">DRAFT — built, tested and measured on one machine</span></div>
+    <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.10.14</span></div>
     <div class="kv"><span class="k">STACK:</span> <span class="v">C++20 · NASDAQ OUCH 4.2 · built on ToyExchange Core · googletest</span></div>
     <div class="kv"><span class="k">SOURCE:</span>
       <a href="https://github.com/infinite-simplex/EventContractLOB" target="_blank">→ EventContractLOB</a> &nbsp;
@@ -173,7 +173,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
     <h4>Pre-allocated order pool with a free list</h4>
     <p>Each side owns 262,144 order slots up front; inserting pops a free slot, filling or canceling pushes it back.</p>
     <p class="buys"><span class="lbl">BUYS</span> No heap allocation on the matching path.</p>
-    <p class="costs"><span class="lbl">COSTS</span> A hard cap per side. When the pool is empty, <code>insert_order</code> throws <code>std::runtime_error</code>.</p>
+    <p class="costs"><span class="lbl">COSTS</span> A hard cap per side. Past it, the part of an order that would rest is rejected with <code>BOOK_FULL</code>.</p>
     <p class="where">BookSide · BOOK_POOL_SIZE, m_free_pool</p>
   </div>
 
@@ -181,7 +181,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
     <h4>Intrusive FIFO list per price level</h4>
     <p>Orders link to each other by pool index (<code>prev</code>/<code>next</code>), with a head and tail per level.</p>
     <p class="buys"><span class="lbl">BUYS</span> O(1) append, O(1) removal from the middle, and price-time priority for free.</p>
-    <p class="costs"><span class="lbl">COSTS</span> Walking a deep level chases links through memory. <span class="todo">measure matching cost against level depth</span></p>
+    <p class="costs"><span class="lbl">COSTS</span> Walking a deep level chases links through memory. Measured: a trade costs about 38 ns per order at any depth while a level's orders sit together in the pool, but 48 ns at 10,000 deep and about 75 ns at 100,000 when they are scattered across it (RESULTS).</p>
     <p class="where">PriceLevel · Order::m_prev_idx / m_next_idx</p>
   </div>
 
@@ -189,7 +189,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
     <h4>Flat order-id lookup table</h4>
     <p>A vector of 10,000,000 order pointers, indexed by order id.</p>
     <p class="buys"><span class="lbl">BUYS</span> O(1) find for cancel and replace.</p>
-    <p class="costs"><span class="lbl">COSTS</span> About 80 MB reserved up front, and it assumes ids stay below 10,000,000 (the replace path checks; see limits).</p>
+    <p class="costs"><span class="lbl">COSTS</span> About 80 MB reserved up front, and ids at or past 10,000,000 are rejected (see limits).</p>
     <p class="where">OrderBook · MAX_GLOBAL_ORDERS</p>
   </div>
 
@@ -205,7 +205,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
     <h4>Two counters per order</h4>
     <p>As the book walks price levels it counts the levels touched and the resting orders visited, in two of Core's opaque counter slots (<code>LobExtSlot</code>). They reach the aggregator as <code>ExtCounter0</code> and <code>ExtCounter1</code>.</p>
     <p class="buys"><span class="lbl">BUYS</span> Visibility into how much matching work each order caused, alongside how long it took.</p>
-    <p class="costs"><span class="lbl">COSTS</span> Two increments inside the matching loop. <span class="todo">measure what they cost</span> A test checks a two-level, three-order sweep bumps them by exactly 2 and 3.</p>
+    <p class="costs"><span class="lbl">COSTS</span> Two increments inside the matching loop. Measured, they cost nothing visible: 37.95 against 38.00 ns per order with and without them, closer than the run-to-run spread. A test checks a two-level, three-order sweep bumps them by exactly 2 and 3.</p>
     <p class="where">LobExtSlot · walk_price_level</p>
   </div>
 
@@ -250,23 +250,45 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
      ===================================================================== -->
 <h2 id="results">RESULTS</h2>
 <p>
-  Nothing in this section has been measured yet — every number is a placeholder to be filled from real runs. These are the engine-side numbers; queuing, network and failover figures are on the
-  <a href="#" data-project="TOY EXCHANGE CORE">Core page</a>, and the test setup is described there.
+  Engine-side numbers only; queuing, network and failover figures are on the
+  <a href="#" data-project="TOY EXCHANGE CORE">Core page</a>. <strong>One machine:</strong> AMD Ryzen 7 5800X (16 threads), Ubuntu 22.04 on WSL2, GCC 11.4 at <code>-O3 -march=native</code>, Core v0.2.0. The gateway, two replicas, performance service and load generator all share that host over loopback, with no CPU pinning.
 </p>
 
+<h3>Under load</h3>
+<p>
+  <code>Tools/load_test.sh</code> drives the whole stack with <code>OuchLoadGenerator</code>: a seeded mix of 55% limit orders, 15% IOC, 20% cancels and 10% replaces at a fixed 10,000 orders a second for 30 seconds, three runs. Each cell is the median of the three runs (the range is in brackets) of the performance service's one-second windows, both replicas together. The counters are zero for orders that never trade, which is most of them.
+</p>
 <div class="tscroll">
 <table class="spec">
-  <thead><tr><th>Metric</th><th>p50</th><th>p99</th><th>p99.9</th><th>max</th></tr></thead>
+  <thead><tr><th>Metric</th><th>p50</th><th>p99</th><th>p99.99</th><th>max</th></tr></thead>
   <tbody>
-    <tr><td class="n">EngineExecutionNs</td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td></tr>
-    <tr><td class="n">ExtCounter0 (price levels touched)</td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td></tr>
-    <tr><td class="n">ExtCounter1 (resting orders touched)</td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td></tr>
+    <tr><td class="n">EngineExecutionNs</td><td>170 ns (160–170)</td><td>535 ns (500–540)</td><td>10.9 µs (9.6–17.3)</td><td>53 µs (34 µs–1.2 ms)</td></tr>
+    <tr><td class="n">ExtCounter0 (price levels touched)</td><td>0</td><td>5</td><td>7</td><td>10</td></tr>
+    <tr><td class="n">ExtCounter1 (resting orders touched)</td><td>0</td><td>7</td><td>11</td><td>14</td></tr>
   </tbody>
 </table>
 </div>
-
 <p>
-  <span class="todo">a short table of EngineExecutionNs by order type or by book depth, once there is a load generator that can produce it</span>
+  The tail is the machine's: p99.99 and max move by an order of magnitude between runs of identical input, and the 1.2 ms came from one run. At 25,000 orders a second the medians were similar (p50 140 ns, p99 490 ns). In the three runs both replicas reported the same number of traces.
+</p>
+
+<h3>One level, in process</h3>
+<p>
+  <code>OrderBookBench</code> times the book alone, with no network. Nanoseconds per resting order traded with, median of seven runs. "Sweep" is one order trading through a whole level; "single" is one-share orders each trading with the head of a level that stays that deep. "Scattered" fills and empties the pool in random order first, so the level's orders are spread across it.
+</p>
+<div class="tscroll">
+<table class="spec">
+  <thead><tr><th>Level depth</th><th>sweep, together</th><th>sweep, scattered</th><th>single, together</th><th>single, scattered</th></tr></thead>
+  <tbody>
+    <tr><td class="n">100</td><td>37.8</td><td>37.7</td><td>40.7</td><td>40.8</td></tr>
+    <tr><td class="n">1,000</td><td>37.8</td><td>37.9</td><td>40.8</td><td>41.1</td></tr>
+    <tr><td class="n">10,000</td><td>37.9</td><td>47.6</td><td>40.8</td><td>49.6</td></tr>
+    <tr><td class="n">100,000</td><td>38.3</td><td>75.5</td><td>40.9</td><td>100</td></tr>
+  </tbody>
+</table>
+</div>
+<p>
+  Depth does not matter while a level's orders sit together; scattered, the cost rises once a level outgrows the cache, and at 100,000 deep it swings between runs (52–125 ns for a sweep). Every fill emits two events and stamps each with a clock read, which is part of the 38 ns.
 </p>
 
 <!-- =====================================================================
@@ -274,20 +296,24 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
      ===================================================================== -->
 <h2 id="tests">TESTS</h2>
 <p>
-  83 test cases at the time of writing, run by <code>ctest</code> and in CI. They cover:
+  86 test cases at the time of writing, run by <code>ctest</code> and in CI. They cover:
 </p>
 <ul>
   <li><strong>Matching semantics</strong> — priority, sweeping several levels, the trade-price rule, and each order type's behavior at the edges (empty book, partial liquidity, limit-price cutoffs).</li>
   <li><strong>Self-trade prevention</strong> — including that earlier fills against other firms still happen and that a fill-or-kill's liquidity count stops at the firm's own order.</li>
-  <li><strong>Validation</strong> — out-of-range prices, zero and oversized quantities (the limit is inclusive at 999,999), unknown symbols, unknown orders, on both the wire and book paths.</li>
+  <li><strong>Validation</strong> — out-of-range prices, zero and oversized quantities (the limit is inclusive at 999,999), unknown symbols, unknown orders, an order id past the lookup table, a full book side, on both the wire and book paths.</li>
   <li><strong>Cancel, replace and timed cancels</strong> — including a rejected replace leaving the original order untouched, and scheduling under the new token after a replace.</li>
   <li><strong>The OUCH wire path</strong> — frames over a loopback TCP connection through Core's real gateway and multicast receiver, malformed frames closing the connection, content errors not doing so.</li>
   <li><strong>Pipeline behavior through this product</strong> — gap recovery, an unrecoverable gap, trace-arena collisions, and leader-gating of timed cancels (Core has no protocol-agnostic stand-ins to test these with on its own).</li>
 </ul>
 <p>
   <strong>By hand:</strong> <code>Tools/two_replica_smoke_test.sh</code> runs a gateway and two replicas and checks that the books converge, that exactly one replica publishes, that the epoch strictly increases after killing the leader,
-  and that the survivor's output still arrives. It is not part of CI. <span class="todo">paste a recorded run of the smoke test</span>
+  and that the survivor's output still arrives. It is not part of CI. A run on Core v0.2.0 (2026-10-14):
 </p>
+<pre class="code">Book state converged -> best bid=40 best ask=60
+PASS: exactly one replica published egress (4 lines for 3 orders / 1 trade)
+PASS: replica-B took over leadership (epoch 1 -> 2)
+PASS: failover complete, survivor's egress reached the gateway (5 total egress lines)</pre>
 
 <!-- =====================================================================
      LIMITS
@@ -296,8 +322,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
 <p>Product-level limits; the pipeline's are on the <a href="#" data-project="TOY EXCHANGE CORE">Core page</a>.</p>
 
 <div class="note limit"><b class="tag">CAPACITY CEILINGS</b>
-  Each book side holds at most 262,144 resting orders (insertion throws beyond that), and the order-id table has 10,000,000 entries. The replace path bounds-checks an id against the table; the plain insert path does not.
-  <span class="todo">decide and document what happens past 10 million orders in a day</span></div>
+  Each book side holds at most 262,144 resting orders; past that, the part of an order that would rest is rejected with <code>BOOK_FULL</code> and any fills it already made stand. Order ids come from one counter that is never reset, and the book's lookup table has 10,000,000 slots: once the ids are used up, the gateway and the book reject every enter and replace with <code>ORDER_LIMIT_REACHED</code>.</div>
 <div class="note limit"><b class="tag">GTD CUTOFF</b>
   The end-of-day cancel time is a fixed UTC−5 offset, not daylight-saving-aware Eastern time, so it is an hour off for most of the year. The code says so in a comment; the build's standard library lacks the time-zone database.</div>
 <div class="note limit"><b class="tag">PRICE DOMAIN</b>
@@ -309,7 +334,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
 <div class="note limit"><b class="tag">EGRESS FORMAT</b>
   The public feed is a custom compact frame, not ITCH, and the <code>DELETED</code> event type is declared but never emitted (a full cancel reports <code>CANCELED</code> with nothing left).</div>
 <div class="note limit"><b class="tag">MEASUREMENTS</b>
-  No performance claims yet; every number above is a placeholder.</div>
+  Everything was measured on one machine over loopback under WSL2, without CPU pinning, so p99.99 and max include the host's scheduling noise. The stack held 10,000 and 25,000 orders a second cleanly. At 35,000 the leader changed 14 times in 15 seconds, and at 50,000 the two replicas ended with different books, so nothing is claimed above 25,000.</div>
 
 <!-- =====================================================================
      REPRODUCE
@@ -320,7 +345,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
 cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure
 
-# gateway + 2 replicas + performance service
+# gateway + 2 replicas (add -DBUILD_PERFORMANCE_SERVICE=ON to configure for percentiles)
 ./run_exchange.sh 2 build
 
 # from another shell: two crossing orders
@@ -329,9 +354,14 @@ build/Tools/OuchTestClient/OuchTestClient --side S --price 50 --qty 10 --firm-id
 
 # kill only the current leader and watch the survivor take over
 ./kill_leader.sh run
-tail -f run/performance.log</pre>
+tail -f run/performance.log
+
+# the measurements above (needs -DBUILD_PERFORMANCE_SERVICE=ON)
+Tools/load_test.sh 10000 30 build
+build/Tools/OrderBookBench/OrderBookBench
+Tools/bench_counters.sh 12 build</pre>
 
 <footer>
-  DRAFT · this page makes no measurement claims; every yellow box is a number or check still owed.
+  DRAFT · the numbers on this page were measured on one machine, as described under RESULTS.
 </footer>
 </div>

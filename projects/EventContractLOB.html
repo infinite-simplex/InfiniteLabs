@@ -291,12 +291,32 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
   Depth does not matter while a level's orders sit together; scattered, the cost rises once a level outgrows the cache, and at 100,000 deep it swings between runs (52–125 ns for a sweep). Every fill emits two events and stamps each with a clock read, which is part of the 38 ns.
 </p>
 
+<h3>Sustained, in process</h3>
+<p>
+  <code>EngineThroughput</code> replays a generated stream through the real book for 30 seconds per row, with no gateway or sockets. The stream is 44% passive limit orders, 8% marketable, 7% IOC, 30% cancels and 10% replaces; every cancel and replace names a resting order, and the book is held at the depth shown. Each cycle must emit the predicted number of events and end with an empty book. Threads are pinned, and the three 50,000-deep runs agree within 1%.
+</p>
+<div class="tscroll">
+<table class="spec">
+  <thead><tr><th>What runs</th><th>Resting orders</th><th>Orders per second</th><th>Per order</th></tr></thead>
+  <tbody>
+    <tr><td>The book alone, events discarded</td><td class="n">1,000</td><td class="n">19.4 M</td><td class="n">51 ns</td></tr>
+    <tr><td>The book alone, events discarded</td><td class="n">50,000</td><td class="n">12.8 M</td><td class="n">78 ns</td></tr>
+    <tr><td>The book alone, events discarded</td><td class="n">200,000</td><td class="n">9.6 M</td><td class="n">104 ns</td></tr>
+    <tr><td>With the real event and trace queues, drained by a second thread</td><td class="n">50,000</td><td class="n">6.1 M</td><td class="n">164 ns</td></tr>
+    <tr><td>Through Core's <code>MatchingService</code>, fed by a producer thread</td><td class="n">50,000</td><td class="n">4.8 M</td><td class="n">209 ns</td></tr>
+  </tbody>
+</table>
+</div>
+<p>
+  A clock read costs about 19 ns here and a command emits about 1.5 events, so roughly 28 ns of every order is timestamping. The queues roughly halve the rate, since each event is copied to a second core. Even the slowest row is nearly ten times the 500,000 orders a second asked of the whole exchange; the pipeline around the engine is what limits it, not the matching.
+</p>
+
 <!-- =====================================================================
      TESTS
      ===================================================================== -->
 <h2 id="tests">TESTS</h2>
 <p>
-  86 test cases at the time of writing, run by <code>ctest</code> and in CI. They cover:
+  87 test cases at the time of writing, run by <code>ctest</code> and in CI. They cover:
 </p>
 <ul>
   <li><strong>Matching semantics</strong> — priority, sweeping several levels, the trade-price rule, and each order type's behavior at the edges (empty book, partial liquidity, limit-price cutoffs).</li>
@@ -334,7 +354,7 @@ PASS: failover complete, survivor's egress reached the gateway (5 total egress l
 <div class="note limit"><b class="tag">EGRESS FORMAT</b>
   The public feed is a custom compact frame, not ITCH, and the <code>DELETED</code> event type is declared but never emitted (a full cancel reports <code>CANCELED</code> with nothing left).</div>
 <div class="note limit"><b class="tag">MEASUREMENTS</b>
-  Everything was measured on one machine over loopback under WSL2, without CPU pinning, so p99.99 and max include the host's scheduling noise. The stack held 10,000 and 25,000 orders a second cleanly. At 35,000 the leader changed 14 times in 15 seconds, and at 50,000 the two replicas ended with different books, so nothing is claimed above 25,000.</div>
+  Everything was measured on one machine over loopback under WSL2, without CPU pinning, so p99.99 and max include the host's scheduling noise. The stack held 10,000 and 25,000 orders a second cleanly, and nothing is claimed above that. Past about 30,000 with two replicas the pipeline is the limit, not the engine (which sustains 4.8 to 19 million orders a second on its own): the gateway sends one UDP datagram per command and pays for every receiver (150,000 or more orders a second with none listening, 66,000 with one replica, 38,000 with two); the arbiter changes leader whenever a replica falls 200 commands behind; and in Core v0.2.0 a lost retransmit reply is applied as the wrong command, so replicas can end with different books. <code>Tools/load_test.sh</code> compares a digest of each replica's whole book to catch that. The order-token table holds 2,097,152 tokens for the life of a process, and the gateway crawls once it is full.</div>
 
 <!-- =====================================================================
      REPRODUCE
@@ -359,7 +379,8 @@ tail -f run/performance.log
 # the measurements above (needs -DBUILD_PERFORMANCE_SERVICE=ON)
 Tools/load_test.sh 10000 30 build
 build/Tools/OrderBookBench/OrderBookBench
-Tools/bench_counters.sh 12 build</pre>
+Tools/bench_counters.sh 12 build
+Tools/engine_throughput.sh 30 build</pre>
 
 <footer>
   DRAFT · the numbers on this page were measured on one machine, as described under RESULTS.

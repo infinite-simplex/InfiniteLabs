@@ -31,7 +31,7 @@
   <div class="box">
     <div class="kv"><span class="k">SUBTITLE:</span> <span class="v">An hourly batch auction for GPU compute, where one bid can accept many models, regions and hours, cleared to one price per item by integer network simplex</span></div>
     <div class="kv"><span class="k">STATUS:</span> <span class="v">COMPLETE — built, tested and measured</span></div>
-    <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.10.13</span></div>
+    <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.10.16</span></div>
     <div class="kv"><span class="k">STACK:</span> <span class="v">C++20 · min-cost flow by network simplex · built on ToyExchange Core v0.3.0 · SQLite (WAL) · googletest</span></div>
     <div class="kv"><span class="k">SOURCE:</span>
       <a href="https://github.com/infinite-simplex/BatchGPU" target="_blank">→ BatchGPU</a> &nbsp;
@@ -94,7 +94,7 @@
     <tr><td class="n">SPSCProducerPolicy&lt;<wbr>TEvent&gt;</td>
         <td><code>BatchEvent</code>, a fixed 112-byte struct: <code>ACCEPTED</code>, <code>REJECTED</code>, <code>CANCELED</code>, <code>FILL</code>, <code>ORDER_DONE</code>, <code>BATCH_DONE</code>, <code>BATCH_VOIDED</code>.</td></tr>
     <tr><td class="n">EgressGateway&lt;<wbr>TGateway,<wbr> TEvent,<wbr> TEncoder&gt;</td>
-        <td><code>BatchEvent<wbr>Encoder</code>: one 102-byte frame per event, to the order's connection and a public feed.</td></tr>
+        <td><code>BatchEvent<wbr>Encoder</code>: one 102-byte frame per event, to the order's connection and a public feed (which packs several frames into each datagram).</td></tr>
     <tr><td class="n">OrderTrace::ext_counters</td>
         <td><code>GpuExtSlot</code>: the clear's lifted units, bids filled, bids unfilled and solver pivots (steps).</td></tr>
   </tbody>
@@ -492,7 +492,7 @@ sink   ──▶ source the return arc, closing the loop: each unit through it e
 
 <p>Results leave the exchange by two routes, and only one of them is the record.</p>
 <ul>
-  <li><strong>The egress is best effort.</strong> Only the leader publishes results to clients, one UDP datagram per event and no resend of lost ones (no gap-fill), so a clear that emits more than about 240 events loses the end of the burst, <code>BATCH_DONE</code> included. Measured on one machine, a batch of 100 bids and 50 asks emitted 337 events and 241 reached the public feed.</li>
+  <li><strong>The egress is best effort.</strong> Only the leader publishes results to clients, as UDP datagrams that each carry a batch of events, and a lost datagram is not sent again (no gap-fill). Measured on one machine, a clear that emits about 78,000 events reached one client whole in three runs of ten and in part in the other seven, <code>BATCH_DONE</code> included in those; see Known limits.</li>
   <li><strong>The recorders recompute.</strong> A recorder is a replica that never leads. It reads the same log, runs the same engine and writes each batch to its own SQLite file; it never hears a result, it derives it again. A client that missed its <code>ORDER_DONE</code> asks the API.</li>
 </ul>
 
@@ -569,7 +569,7 @@ sink   ──▶ source the return arc, closing the loop: each unit through it e
 
 <h3>One telemetry window: the clear</h3>
 <p>
-  The load: 10,000 bids from 500 buyers and 7,500 asks (each ask offers 5 items, each bid accepts 20; synthetic, <code>Bench/gen_load.py</code>, 272,281 arcs), sent by one client over TCP to the gateway, then a <code>BATCH_CLEAR</code>, then 2,500 more orders straight behind it. The gateway, two replicas, two recorders and the performance service ran on one machine, so four engines solved the same batch at once. <code>Bench/telemetry_run.sh</code> reproduces it.
+  The load: 10,000 bids from 500 buyers and 7,500 asks (each ask offers 5 items, each bid accepts 20; synthetic, <code>Bench/gen_load.py</code>, 272,281 arcs; not the ERCOT-calibrated batch of the table above, so its clear time is not comparable with that row), sent by one client over TCP to the gateway, then a <code>BATCH_CLEAR</code>, then 2,500 more orders straight behind it. The gateway, two replicas, two recorders and the performance service ran on one machine, so four engines solved the same batch at once. <code>Bench/telemetry_run.sh</code> reproduces it.
   This is the one-second window that holds the clear, as replica 1 reported it in the first of five runs on Core v0.3.0's defaults (the clear took 517 ms; the five took 494 to 537 ms). Times are nanoseconds.
 </p>
 <pre class="code">[perf] replica=1 metric=engine_exec_ns           n=2501 min=180   max=517210111 p50=330       p99=880
@@ -582,25 +582,25 @@ sink   ──▶ source the return arc, closing the loop: each unit through it e
 [perf] replica=1 metric=ext_counter_3 (pivots)   n=2501 min=0     max=198655    p50=0</pre>
 <p>
   <strong>Reading it.</strong> The 2,501 commands are the clear and the 2,500 orders sent behind it, all in the same second. The clear is the maximum of <code>engine_exec_ns</code> (517 ms; replica 2 took 532 ms); admitting an order takes about 330 ns at the median. The counters ride on the clear's trace alone, so only their maximum means anything: 28,159 units lifted, 7,519 bids filled, 2,527 unfilled, 198,655 pivots. The histogram rounds up to a bucket edge, and the recorder holds the exact figures (198,387 pivots, 28,098 lifted).
-  The orders behind the clear spent the clear's duration upstream of the engine. <code>network_delay_ns</code>, stamped when the replica takes a command off its socket, has a median of 496 ms: the queue was full (1,031 deep is its capacity of 1,024 as the histogram rounds it up), so the receiver stopped reading and the orders sat in its 4 MiB socket buffer. When the clear ended the queue stayed full while the engine drained it (a median depth of 1,007), and an order waited about 0.49 ms in it. On v0.2.0, with the default 208 KB buffer, the same wait overflowed the buffer; the kernel dropped 5,645 to 17,696 datagrams over five runs, against 75 to 1,988 over the ten on v0.3.0 (both counted for the whole machine).
+  The orders behind the clear spent the clear's duration upstream of the engine. <code>network_delay_ns</code>, stamped when the replica takes a command off its socket, has a median of 496 ms: the queue was full (1,031 deep is its capacity of 1,024 as the histogram rounds it up), so the receiver stopped reading and the orders sat in its 4 MiB socket buffer. When the clear ended the queue stayed full while the engine drained it (a median depth of 1,007), and an order waited about 0.49 ms in it. The kernel still dropped 75 to 1,988 datagrams over the ten runs (counted for the whole machine); a receiver fetches what it missed from the gateway.
 </p>
 
 <p>
-  <strong>Without the clear in the window</strong>, one client sends about 12,000 orders in a second. The same load on three versions of Core, as the range over the runs of each:
+  <strong>Without the clear in the window</strong>, one client sends about 12,000 orders in a second. The same load on Core's defaults and on its load settings, as the range over the five runs of each:
 </p>
 <div class="tscroll">
 <table class="spec">
-  <thead><tr><th>One second of ordinary orders</th><th>Core v0.2.0 (4 runs)</th><th>v0.3.0 defaults (5)</th><th>v0.3.0 load settings (5)</th></tr></thead>
+  <thead><tr><th>One second of ordinary orders</th><th>Core defaults</th><th>Core load settings</th></tr></thead>
   <tbody>
-    <tr><td>network delay, median</td><td class="n">1.9 to 2.1 ms</td><td class="n">107 to 153 µs</td><td class="n">65 to 81 µs</td></tr>
-    <tr><td>network delay, p99</td><td class="n">4.6 to 5.5 ms</td><td class="n">0.38 to 1.9 ms</td><td class="n">0.29 to 0.53 ms</td></tr>
-    <tr><td>engine time, median</td><td class="n">1.18 to 1.22 µs</td><td class="n">0.54 to 0.71 µs</td><td class="n">0.51 to 0.55 µs</td></tr>
-    <tr><td>engine time, p99</td><td class="n">9.0 to 10.0 µs</td><td class="n">7.7 to 10.4 µs</td><td class="n">6.2 to 7.2 µs</td></tr>
+    <tr><td>network delay, median</td><td class="n">107 to 153 µs</td><td class="n">65 to 81 µs</td></tr>
+    <tr><td>network delay, p99</td><td class="n">0.38 to 1.9 ms</td><td class="n">0.29 to 0.53 ms</td></tr>
+    <tr><td>engine time, median</td><td class="n">0.54 to 0.71 µs</td><td class="n">0.51 to 0.55 µs</td></tr>
+    <tr><td>engine time, p99</td><td class="n">7.7 to 10.4 µs</td><td class="n">6.2 to 7.2 µs</td></tr>
   </tbody>
 </table>
 </div>
 <p>
-  The load settings are the ones Core v0.3.0 recommends for load: receivers that spin for 100 µs after each datagram, and no console line per event on the gateway. Why the engine's own time halved is not established; the engine code did not change, so it is probably less competition from the egress thread. This load is well below the 70,000 orders a second above which Core's release notes say v0.2.0's leader began to change, so these runs say nothing about that fix.
+  The load settings are the ones Core recommends for load: receivers that spin for 100 µs after each datagram, and no console line per event on the gateway. The networking behind these figures is Core's; the engine and solver are the same code in both columns.
 </p>
 
 <p>
@@ -618,9 +618,9 @@ sink   ──▶ source the return arc, closing the loop: each unit through it e
 <div class="note limit"><b class="tag">A RESTART LOSES THE OPEN BATCH</b>
   The gateway's sequenced log does not survive a restart, so the orders waiting for a clear are lost. The replicas and recorders must be restarted with it: they take the restarted gateway's commands for duplicates and ignore them, as a test showed. A replica or recorder started or restarted alone catches up on its own from the gateway's log, by the same test, but it replays from the first command, so only while the gateway's ring (1,048,576 commands) still holds it. A new solver build is a planned down window right after a clear.</div>
 <div class="note limit"><b class="tag">REPORTING IS BEST EFFORT</b>
-  Replica-to-gateway UDP has no gap-fill. Core v0.3.0 batches the replicas' results, which fixed the loss of the end of any clear over about 240 events, but a client can still miss some. Across ten runs of a clear that emits about 78,000 events, one client received every event in three and only part in seven; it always had the first 17,500 acknowledgements. The gateway's own counters showed no event missing from the replicas and no client output dropped, yet it had delivered only 29,560 to 74,278 of the events, so Core's statistics do not show this loss. It is not the gateway's 1 MiB limit on a client's unsent output: 16 MiB changed nothing in three runs. The cause is not known. Every result is in the recorders' files and the API, which is where a client asks for one it missed. Telemetry is UDP too, and its histograms stop at about 1.07 s and 1,000,000: a longer clear or a larger count is dropped, uncounted.</div>
+  Replica-to-gateway UDP has no gap-fill, so a client can miss some of a large clear's results. Across ten runs of a clear that emits about 78,000 events, one client received every event in three and only part in seven; it always had the first 17,500 acknowledgements. The gateway's own counters showed no event missing from the replicas and no client output dropped, yet it had delivered only 29,560 to 74,278 of the events, so Core's statistics do not show this loss. It is not the gateway's 1 MiB limit on a client's unsent output: 16 MiB changed nothing in three runs. The cause is not known. Every result is in the recorders' files and the API, which is where a client asks for one it missed. Telemetry is UDP too, and its histograms stop at about 1.07 s and 1,000,000: a longer clear or a larger count is dropped, uncounted.</div>
 <div class="note limit"><b class="tag">ORDERS BEHIND A CLEAR WAIT FOR IT</b>
-  A replica's inbound queue holds 1,024 commands, and the clear holds it for as long as it runs. Orders sent right behind a clear fill the queue, and the receiver stops reading until the clear ends, so they wait in its socket buffer: with Core v0.3.0's 4 MiB buffer they fit, and in all ten runs every order was recorded and the two recorders wrote identical digests. The median order reached the engine 0.44 to 0.51 s after the gateway took it. The kernel still dropped 75 to 1,988 UDP datagrams during those runs, counted for the whole machine, and a receiver fetches what it missed from the gateway after 200 ms without a datagram (Core v0.2.0 and later). On Core v0.1.0 the same load left 1,254 of the 2,500 orders out of the batch until a later command arrived, and a second clear then filled the gap before it was applied; no run has sent a clear while a burst was still being recovered.</div>
+  A replica's inbound queue holds 1,024 commands, and the clear holds it for as long as it runs. Orders sent right behind a clear fill the queue, and the receiver stops reading until the clear ends, so they wait in its socket buffer: with Core v0.3.0's 4 MiB buffer they fit, and in all ten runs every order was recorded and the two recorders wrote identical digests. The median order reached the engine 0.44 to 0.51 s after the gateway took it. The kernel still dropped 75 to 1,988 UDP datagrams during those runs, counted for the whole machine, and a receiver fetches what it missed from the gateway after 200 ms without a datagram. No run has sent a clear while a burst was still being recovered.</div>
 <div class="note limit"><b class="tag">SINGLE GATEWAY</b>
   The ticker, sequencer, retransmit server, arbiter and egress gateway share one process. Matching and recording are replicated; the front door is not.</div>
 <div class="note limit"><b class="tag">A TOY MARKET</b>
@@ -648,7 +648,7 @@ GEN=realistic Bench/run_sweep.sh   # the same sweep on ERCOT-calibrated batches<
   <code>Client/BatchClient</code> is a small command-line order-entry client. It stays connected from the order to the clear, because results go back to the connection that sent the order, and it prints every event that arrives.
   To see a batch clear without waiting for the half hour, start the gateway with <code>--no-ticker</code> and run the client's <code>demo</code> command, which enters an ask and three bids and clears them. With the ticker on, leave out <code>--batch</code>: the open batch follows the clock. The client is not covered by the tests.
   The frames it sends are in <code>NetworkService/BatchWire.hpp</code>.
-  For load, Core v0.3.0 recommends receivers that spin (<code>--ingress-spin-micros 100</code> on the replicas and the recorder) and no console line per event (<code>--no-console-echo</code> on the gateway), with <code>net.core.rmem_max</code> at 4 MiB or more on the host. The replicas, the recorder and the gateway must be built against the same Core version, because the format of the results channel changed in v0.3.0.
+  For load, Core recommends receivers that spin (<code>--ingress-spin-micros 100</code> on the replicas and the recorder) and no console line per event (<code>--no-console-echo</code> on the gateway), with <code>net.core.rmem_max</code> at 4 MiB or more on the host. The replicas, the recorder and the gateway must be built against the same Core version.
 </p>
 <pre class="code">build/MatchingService/MatchingServiceApp --replica-id 1
 build/MatchingService/MatchingServiceApp --replica-id 2     # optional: only the leader publishes

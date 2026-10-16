@@ -30,7 +30,7 @@
 </p>
 <p>
   The shape is borrowed from the <strong>LMAX Disruptor</strong>: every stage is a single thread that owns its data, and stages are joined by lock-free single-producer/single-consumer ring buffers,
-  so the hot path takes no locks. On top of that it adds what a Disruptor alone doesn't give you — a sequenced and replicated input, a leader-elected matching tier with real failover, and a measurement path.
+  so the path from the socket to the engine takes no locks. (The egress gateway takes one mutex per client per batch, to find that client's socket.) On top of that it adds what a Disruptor alone doesn't give you — a sequenced and replicated input, a leader-elected matching tier with real failover, and a measurement path.
 </p>
 
 <h3>What is in the repository</h3>
@@ -38,6 +38,7 @@
   <li><strong><code>Core/</code></strong> — a header-only CMake library: ingress, egress, replica arbitration, the generic replica host, the SPSC queue, and telemetry.
       Nothing in it names a price, a quantity or a wire protocol.</li>
   <li><strong><code>PerformanceService/</code></strong> — <code>PerformanceServiceApp</code>, which turns every replica's per-command timing into HdrHistogram percentiles.</li>
+  <li><strong><code>Benchmarks/</code></strong> — opt-in tools (<code>-DTOYEXCHANGE_BENCHMARKS=ON</code>). <code>IngressBench</code> runs the real gateway and receivers over a chosen transport. The Aeron comparison below used it.</li>
   <li><strong>No product logic.</strong> Products consume this repository as a dependency (CMake <code>FetchContent</code>, pinned to a release tag) rather than living inside it.</li>
 </ul>
 <p>
@@ -76,8 +77,9 @@
 <table class="spec wrapfirst">
   <thead><tr><th>Core piece</th><th>What the product provides</th><th>EventContractLOB's answer</th><th>BatchGPU's answer</th></tr></thead>
   <tbody>
-    <tr><td class="n">NetworkGateway&lt;<wbr>TProtocolHandler,<wbr> TCommand&gt;</td>
-        <td><code>validateAndParse(buf, len, cmd)</code> → bytes consumed, 0 if the frame is incomplete, or a fatal-error code (the gateway then closes that connection). The gateway stamps <code>trace_id</code> and <code>sessionId</code> onto the command.</td>
+    <tr><td class="n">NetworkGateway&lt;<wbr>TProtocolHandler,<wbr> TCommand[,<wbr> TFanOut]&gt;</td>
+        <td><code>validateAndParse(buf, len, cmd)</code> → bytes consumed, 0 if the frame is incomplete, or a fatal-error code (the gateway then closes that connection). The gateway stamps <code>trace_id</code> and <code>sessionId</code> onto the command.
+            Optionally, a fan-out: the object that sends each batch of sequenced records to the replicas. The default sends one UDP multicast datagram per batch.</td>
         <td>OuchProtocolHandler, OuchOrderCommand</td>
         <td>BatchProtocol<wbr>Handler, BatchCommand</td></tr>
     <tr><td class="n">MatchingService&lt;<wbr>TCommand,<wbr> TEngine&gt;</td>
@@ -89,7 +91,7 @@
         <td>OrderEvent</td>
         <td>BatchEvent</td></tr>
     <tr><td class="n">EgressGateway&lt;<wbr>TGateway,<wbr> TEvent,<wbr> TEncoder&gt;</td>
-        <td>A static <code>encode(event)</code> to wire bytes and a <code>print()</code> for the console. Events carry a <code>session_id</code> so the private ack can find its client.</td>
+        <td>A static <code>encode(event)</code> to wire bytes and a <code>print()</code> for the console. Events carry a <code>session_id</code> so the private ack can find its client. An event must be trivially copyable, because it crosses the wire as raw bytes.</td>
         <td>OuchEventEncoder</td>
         <td>BatchEvent<wbr>Encoder</td></tr>
     <tr><td class="n">OrderTrace::ext_counters</td>
@@ -156,12 +158,10 @@
   <li><strong>Same input.</strong> The gateway fixes one total order, and each replica applies it from sequence 0, once and in order. Gaps are filled by retransmit before the live message is processed,
       a duplicate or late datagram is dropped, and a replica that starts late, restarts, or loses the tail of a burst replays what it missed. Core's ingress-recovery tests cover each of those cases.
       A replica that can no longer reach sequence 0 stops itself instead of running on a partial history.</li>
-  <li><strong>Same function.</strong> In the reference product's engine the book is fixed-size: two sides of 101 price levels, an index-linked order pool with a free list, an id lookup table and two counters.
-      The engine has no hash containers, sorting, randomness or floating point, and the only global it touches is the telemetry arena, which is output only. It reads the clock in exactly two ways, and neither feeds back into book state:
-      the timestamp on each emitted event, and the 4 pm cutoff handed to the timed-cancel scheduler. The timed cancel itself comes back through the gateway as a sequenced command.</li>
+  <li><strong>Same function.</strong> This half belongs to the product, and Core cannot check it. The rule above is the contract between the two. Each product shows how its own engine keeps it.</li>
 </ul>
-<div class="note"><b class="tag">SCOPE</b> This is an argument from reading the engine, not a proof, and nothing compares full book state automatically: the two-replica smoke test (a shell script in the reference product, run by hand) compares best bid/ask across replicas.
-  Two edges sit outside the argument. Events carry a per-replica timestamp, so two replicas' event streams match only if that field is ignored. A command that makes the engine throw (an exhausted order pool, say) would throw on every replica.</div>
+<div class="note"><b class="tag">SCOPE</b> This is a contract, not a proof. Core does not check that an engine is deterministic, and it does not compare the replicas' state. A product that wants that check must make it.
+  Two replicas' event streams also match only where the events carry nothing that differs per replica, such as a timestamp.</div>
 
 <h3>2 · Losing packets: gap detection and retransmit</h3>
 <p>
@@ -197,18 +197,18 @@
   <div class="cli-log" id="log3"></div>
   <figcaption>
     <strong>Recoverable:</strong> the missing record is still in the ring, so it is pushed first and the live message follows — queue order is preserved.
-    <strong>Evicted:</strong> the server answers <code>TOO_OLD</code>, so the replica stops. Both paths have automated tests, in this repository and in the reference product.
+    <strong>Evicted:</strong> the server answers <code>TOO_OLD</code>, so the replica stops. Both paths have automated tests in this repository.
   </figcaption>
 </figure>
 
 <h3>3 · Leadership and fencing</h3>
 <p>
   Every replica sends a heartbeat to the gateway's <code>ReplicaArbiter</code> every 2 ms, carrying its id and the last sequence number it applied. The arbiter replies with the current
-  <code>{epoch, leaderId}</code>. A replica is <em>eligible</em> to lead if its last heartbeat is fresh (default: within 10 ms) and it is no more than 200 sequence numbers behind the most advanced replica.
+  <code>{epoch, leaderId}</code>. A replica is <em>eligible</em> to lead if its last heartbeat is fresh (default: within 10 ms) and it has not fallen behind. Not falling behind means it has reached the highest sequence number that any replica reported one lag window ago (default: 20 ms).
   The current leader keeps the role while it stays eligible ("sticky"); otherwise the lowest-numbered eligible replica takes over.
 </p>
 <p>
-  The epoch is bumped on <em>every</em> leadership change, including to or from "nobody". Each published event carries the epoch its sender last heard, and the egress gateway — which lives in the
+  The epoch is bumped on <em>every</em> leadership change, including to or from "nobody". Each published datagram carries the epoch its sender last heard, and the egress gateway — which lives in the
   same process as the arbiter and reads the epoch directly — drops anything older than the current one. That is what makes a deposed leader's late packets harmless: it doesn't have to notice it lost the job, the sink refuses its traffic anyway.
 </p>
 
@@ -249,8 +249,8 @@
     <tr><td>Egress spin window</td><td class="n">0 µs (off)</td><td>egress gateway; <code>NetworkConfig::egressSpinMicros</code>. Works as the receiver's window, and only right after traffic</td></tr>
     <tr><td>Console echo</td><td class="n">on</td><td>egress gateway; <code>NetworkConfig::egressConsoleEcho</code>. One <code>[egress] …</code> line per event, written once per datagram. A product's tests may count the lines. Switch it off for load: see Results</td></tr>
     <tr><td>Client output limit</td><td class="n">1 MiB</td><td>per client; <code>NetworkConfig::sessionOutboundBufferBytes</code>. Output that a full client socket has not taken is kept, oldest first. Past the limit, a new write is dropped whole (never cut mid-frame) and counted</td></tr>
-    <tr><td>Sequence store capacity</td><td class="n">2<sup>20</sup> = 1,048,576 slots</td><td>NetworkServiceApp default in the reference product; the ring's replay horizon</td></tr>
-    <tr><td>Inbound / event / trace queues</td><td class="n">1,024 / 16,384 / 16,384</td><td>per replica (SPSC ring capacities)</td></tr>
+    <tr><td>Sequence store capacity</td><td class="n">2<sup>20</sup> = 1,048,576 slots</td><td>set by the product when it builds the gateway (2<sup>20</sup> in the measurement runs below); the ring's replay horizon</td></tr>
+    <tr><td>Inbound / event / trace queues</td><td class="n">1,024 / 16,384 / 16,384</td><td>per replica (SPSC ring capacities: Core's default for the inbound queue, and the event and trace queues of <code>SPSCProducerPolicy</code>)</td></tr>
   </tbody>
 </table>
 </div>
@@ -278,8 +278,8 @@
       drops datagrams in the middle of a reply, sends every reply twice, or sends a stale datagram that overlaps the next needed record never makes the replica duplicate, skip or reorder a record;
       duplicated, late and reordered live datagrams are applied once; and the idle probe catches up a late joiner, or the lost tail of a burst, with no live message, resumes at a record lost mid-reply, stops on evicted history, and survives an unreachable server; the receiver applies the configured 4 MiB receive buffer, and a request that the kernel cap clips is reported as clipped.
       The tests use small rings (1,024 slots) to stay fast; the boundary is the same arithmetic at 2<sup>20</sup>.</li>
-  <li><strong>Through the reference product.</strong> The gateway end to end over a real wire protocol, trace-arena collision detection, and the leader-gating of timed cancels are exercised by EventContractLOB's tests,
-      which also repeat gap recovery with a real command type. Core's own tests use stand-ins for the wire protocol, the command and the egress event, so none of this machinery depends on a product to be tested.</li>
+  <li><strong>Stand-ins, not a product.</strong> Core's own tests use stand-ins for the wire protocol, the command and the egress event, so none of this machinery depends on a product to be tested.
+      Anything that needs a real wire protocol or a real engine is tested in the product's own repository.</li>
 </ul>
 
 <!-- =====================================================================
@@ -348,9 +348,9 @@
     <h4>Busy-polling matching thread</h4>
     <p>The matching thread spins on <code>try_pop</code> with no sleep or yield.</p>
     <p class="buys"><span class="lbl">BUYS</span> No wake-up latency when a command arrives.</p>
-    <p class="costs"><span class="lbl">COSTS</span> A core at 100% even when idle. Measured with no traffic: each replica uses about 302% of a core, because its matching thread, egress publisher and telemetry forwarder (identified by start order) all spin at 100%.
+    <p class="costs"><span class="lbl">COSTS</span> A core at 100% even when idle. Measured with no traffic, on Core v0.2.1: each replica uses about 302% of a core, because its matching thread, egress publisher and telemetry forwarder (identified by start order) all spin at 100%.
       The gateway uses 3%, so a stack with two replicas uses about 607% of one core out of 16 hardware threads. The optional receiver spin window adds nothing at idle.</p>
-    <p class="costs"><span class="lbl">PINNING</span> The code does no CPU pinning or scheduler tuning. I tried pinning each process with <code>taskset</code> (gateway on two cores, each replica on three whole cores plus one sibling thread) at 50,000 orders/s, three 30-second runs each.
+    <p class="costs"><span class="lbl">PINNING</span> The code does no CPU pinning or scheduler tuning. I tried pinning each process with <code>taskset</code> (gateway on two cores, each replica on three whole cores plus one sibling thread) at 50,000 orders/s on Core v0.2.1, three 30-second runs each.
       It made no clear difference. <code>NetworkDelayNs</code> p99 was 530&nbsp;µs pinned against 649&nbsp;µs unpinned (medians), with the run-to-run ranges overlapping slightly. The queuing-delay p50 and p99, the queue depth and the engine time matched within the spread.
       A deliberately crowded control, with every process on two cores, was clearly worse: queuing-delay p99 of 3.8&nbsp;ms and 8 leader changes, so the comparison can see an effect when there is one.
       This was pinning by process, not by thread, on a machine with cores to spare; per-thread pinning and busier loads are untested.</p>
@@ -481,6 +481,7 @@
 </div>
 <p>
   With two replicas, the hand-written transport and Aeron over UDP both top out near 1.3 million commands per second. Shared memory kept up at 3 million, but only works between processes on one host.
+  The 232,000/s for blocking receivers is a figure from this benchmark. The full stack under Results ingests about 335,000 orders/s with blocking receivers. The two setups differ in record size and in what each replica does per command, so the figures do not compare.
 </p>
 
 <div class="tscroll">
@@ -518,16 +519,16 @@
      ===================================================================== -->
 <h2 id="results">RESULTS</h2>
 <p>
-  These are the first end-to-end numbers. Every process ran on one machine, in one WSL2 virtual machine: the gateway, two replicas, <code>PerformanceServiceApp</code>, and the reference product's load generator.
+  These are the first end-to-end numbers. Core needs a product on top to run, so every run used one product as the testing ground: EventContractLOB, at the commit named in the Build row.
+  The numbers describe Core's pipeline. They are not that product's results. Every process ran on one machine, in one WSL2 virtual machine: the gateway, two replicas, <code>PerformanceServiceApp</code>, and the product's load generator.
   The generator sends a seeded mix of limit orders (55%), immediate-or-cancel orders (15%), cancels (20%) and replaces (10%), in 1&nbsp;ms bursts.
-  Each cell is the median, over the one-second windows of both replicas, of that window's percentile. The max column is the largest value in any window. The first three windows and the last one are dropped.
-  Engine-side numbers (<code>EngineExecutionNs</code> and the product counters) belong to the product; see
-  <a href="#" data-project="EVENT CONTRACT LOB">EventContractLOB</a> and <a href="#" data-project="BATCH GPU">BatchGPU</a>.
-  For scale, the engine's own execution time in the same run was 80&nbsp;ns at p50 and 350&nbsp;ns at p99.
+  Each cell is the median, over the one-second windows of both replicas, of that window's percentile. The max column is the largest value in any window. The first three windows and the last one are dropped, unless a table says otherwise.
+  Engine-side numbers (<code>EngineExecutionNs</code> and the product counters) belong to the product and are not reported here.
+  For scale, that product's engine took 80&nbsp;ns at p50 and 350&nbsp;ns at p99 in the 50,000 orders/s run.
 </p>
 
 <h3>At 50,000 orders/s</h3>
-<p>100 windows (50 per replica) from a 60-second run, taken before the product's token-table limit described below.</p>
+<p>100 windows (50 per replica) from a 60-second run on Core v0.2.1, taken before the measurement product's order-token limit (see "Run length" below).</p>
 <div class="tscroll">
 <table class="spec">
   <thead><tr><th>Pipeline metric</th><th>p50</th><th>p99</th><th>p99.99</th><th>max</th></tr></thead>
@@ -572,7 +573,7 @@
 </table>
 </div>
 <p>
-  The median did not move. The tail fell: the p99 of <code>NetworkDelayNs</code> went from 8.8&nbsp;ms to 665&nbsp;µs (13 times lower), and the p99 of <code>QueuingDelayNs</code> from 15.4&nbsp;ms to 62&nbsp;µs (250 times lower).
+  The median moved little (<code>NetworkDelayNs</code> from 167 to 182&nbsp;µs, <code>QueuingDelayNs</code> from 1.0 to 1.3&nbsp;µs). The tail fell: the p99 of <code>NetworkDelayNs</code> went from 8.8&nbsp;ms to 665&nbsp;µs (13 times lower), and the p99 of <code>QueuingDelayNs</code> from 15.4&nbsp;ms to 62&nbsp;µs (250 times lower).
   The inbound queue no longer fills (largest depth 135, against about 1,024), which points to the same cause as the leader changes (see below).
 </p>
 
@@ -603,7 +604,7 @@
     <tr><td class="n">Sustained command rate (gateway / replica)</td><td>
       <strong>500,000 orders/s for 4&nbsp;s</strong> (2.0 million orders), in three runs out of three, with identical books on both replicas, no leader change, no sequence gap and no egress event lost.
       That needs two settings that the product chooses: a 100&nbsp;µs receiver spin window and the console echo off. With Core's defaults the same stack ingests 100,000 and 200,000 orders/s at target, and about 335,000 at a target of 500,000 (below).
-      Longer runs: 100,000 orders/s for 15&nbsp;s with stable leadership. Runs at the higher rates cannot be longer with this order mix, because of the product's token table (below).
+      Longer runs: 100,000 orders/s for 15&nbsp;s with stable leadership. Runs at the higher rates are short because of the measurement product's order-token limit (see "Run length" below).
       The table after this one has every run, and what limited the rate is listed after that.</td></tr>
     <tr><td class="n">Failover: leader killed → survivor publishes</td><td>
       <strong>Median 11.7&nbsp;ms</strong> (range 9.9 to 12.3&nbsp;ms) over five kills at 20,000 orders/s, measured again after the egress rework. Before it: median 11.4&nbsp;ms, range 9.1 to 14.1&nbsp;ms.
@@ -614,9 +615,9 @@
     <tr><td class="n">Test hardware</td><td>AMD Ryzen 7 5800X (8 cores, 16 threads), 32&nbsp;GB RAM. Run under WSL2 (WSL 3.0.3, Linux 6.18.54, Ubuntu 22.04) with 16&nbsp;GB. Not bare metal. No core pinning.</td></tr>
     <tr><td class="n">Topology of the run</td><td>One host. The gateway, both replicas, the performance service and the load generator all ran in the same virtual machine. The multicast groups ran over its own network interface.
       One clock serves every process, so the cross-machine metrics are valid arithmetic here, but they do not measure a network.</td></tr>
-    <tr><td class="n">Build</td><td>Release: <code>-O3 -march=native -mtune=native -Wall -Wextra -pthread</code>. The 50,000 orders/s table and the "before" table are Core v0.2.1 with EventContractLOB at commit c6e1212.
-      The runs after the egress rework are the unreleased Core (the batched egress, a fan-out template parameter whose default is unchanged, and the bounded client output) with the EventContractLOB working tree of 16 October 2026, not a tagged commit.
-      Some of those runs used a scratch copy of the same Core whose only differences were environment switches for the spin windows and the console echo, and a line of egress counts printed at stop. GCC 11.4, CMake 4.4 (Ubuntu 22.04 on WSL2).</td></tr>
+    <tr><td class="n">Build</td><td>Release: <code>-O3 -march=native -mtune=native -Wall -Wextra -pthread</code>. The 50,000 orders/s table and the first 100,000 orders/s table ("before the egress rework") are Core v0.2.1 with EventContractLOB at commit c6e1212.
+      Every run after the egress rework is Core v0.3.0 (commit f130e75) with EventContractLOB at commit df58d8b. The one difference is that the loss warning, which only writes to standard error, was added to Core after these runs.
+      Some runs used a scratch copy of the same Core whose only differences were environment switches for the spin windows and the console echo, and a line of egress counts printed at stop. GCC 11.4, CMake 4.4 (Ubuntu 22.04 on WSL2).</td></tr>
   </tbody>
 </table>
 </div>
@@ -637,8 +638,8 @@
     <tr><td>Core defaults</td><td class="n">500,000 · 4 s · 3 runs</td><td class="n">342,320 · 335,495 · 332,643</td><td class="n">0 · 0 · 0</td><td class="n">4% to 6%</td></tr>
     <tr><td>Receiver spin 100 µs</td><td class="n">300,000 · 6 s</td><td class="n">299,939</td><td class="n">0</td><td class="n">none</td></tr>
     <tr><td>Receiver spin 100 µs</td><td class="n">400,000 · 5 s</td><td class="n">399,903</td><td class="n">0</td><td class="n">none</td></tr>
-    <tr><td>Receiver spin 100 µs</td><td class="n">500,000 · 4 s · 4 runs</td><td class="n">499,839 to 499,847</td><td class="n">0 · 0 · 0 · 0</td><td class="n">21% to 25% (one run counted: 839,885 of 3.94 million)</td></tr>
-    <tr><td>Receiver spin 100 µs, console echo off</td><td class="n">500,000 · 4 s · 3 runs</td><td class="n">499,838 · 499,848 · 499,848</td><td class="n">0 · 0 · 0</td><td class="n">0 · 0 · 0 (counted)</td></tr>
+    <tr><td>Receiver spin 100 µs (in one of the four runs, the egress spin window too)</td><td class="n">500,000 · 4 s · 4 runs</td><td class="n">499,839 to 499,847</td><td class="n">0 · 0 · 0 · 0</td><td class="n">21% to 25% (one run counted: 839,885 of 3.94 million)</td></tr>
+    <tr><td>Receiver spin 100 µs, console echo off</td><td class="n">500,000 · 4 s · 3 runs</td><td class="n">499,846 · 499,848 · 499,838</td><td class="n">0 · 0 · 0</td><td class="n">0 · 0 · 0 (counted)</td></tr>
   </tbody>
 </table>
 </div>
@@ -662,12 +663,9 @@
 [perf] replica=1 metric=ext_counter_1 n=50237 min=0 max=18 p50=0 p99=9 p99.99=16</pre>
 
 <h3>What limited the rate</h3>
-<p>The engine itself is not the limit: in the runs after the rework its execution time was 75 to 85&nbsp;ns at p50, and its p99 was at most 510&nbsp;ns in any one-second window.
-  Four things limited the rate or the stability, each found by changing one thing and rerunning.</p>
+<p>The measurement product's engine is not the limit: in the 100,000 and 500,000 orders/s runs after the rework its execution time was 75 to 85&nbsp;ns at p50, and its p99 was at most 510&nbsp;ns in any one-second window.
+  Three things limited the rate or the stability, each found by changing one thing and rerunning.</p>
 <ul>
-  <li><strong>The product's token table.</strong> The reference product's gateway keeps a fixed table of 2<sup>21</sup> slots that maps order tokens to ids. It only grows. This order mix fills it after about 2.6 million orders.
-      A 60-second run at 50,000 orders/s reached that at 53&nbsp;s: the replica's rate fell from 50,000 to about 300 orders/s, the engine's p50 stayed under 200&nbsp;ns, and <code>NetworkDelayNs</code> rose from 140&nbsp;µs to over 100&nbsp;ms.
-      Run on its own, the table inserts in about 170&nbsp;ns up to 1.9 million tokens and takes 92&nbsp;µs per insert at 2.1 million. This belongs to the product, not to Core. It is why the runs at 200,000 orders/s and above look like a collapse when they are long enough.</li>
   <li><strong>Leadership under load (fixed by the egress rework).</strong> Before the rework the leader changed 47 to 84 times in every run from 100,000 to 500,000 orders/s, and 6 times at 70,000. It did not change at 60,000 and below.
       The cause was the leader's publisher, which sent each event as its own datagram. Above about 70,000 orders/s that many system calls could not keep up, so the event queue (16,384 slots) filled and the leader's matching thread blocked on it.
       The leader then fell about 20&nbsp;ms (about 2,000 commands at this rate) behind the other replica. The arbiter did its job: it saw a lagging leader, promoted the follower and increased the epoch. The old leader caught up, and the cycle repeated about every quarter of a second.
@@ -679,10 +677,16 @@
       With receivers that spin for 100&nbsp;µs the gateway ingests 500,000 orders/s (the optional spin window), in seven runs out of seven. The old stack with blocking receivers and egress on also reached 500,000. A likely reason is that the slow egress kept the replicas busy,
       so their receivers always found a datagram waiting and never had to be woken. I did not test that.</li>
   <li><strong>One egress thread.</strong> The gateway's egress thread (identified by thread start order) does the work for every event: it decodes, encodes, writes to the client, adds to the public feed and, by default, prints a line.
-      With the console echo on, it used 34% of a core at 100,000 orders/s, 91% at 300,000 and 93% at 500,000. At 500,000 the gateway lost 21% of the events in the run that counted them (839,885 of 3.94 million), and 4% to 25% in the other runs at 400,000 and 500,000.
+      With the console echo on, it used 34% of a core at 100,000 orders/s, 91% at 300,000 and 93% at 500,000. At 500,000 the gateway lost 21% of the events in the run that counted them (839,885 of 3.94 million). Of the nine echo-on runs at 400,000 and 500,000, eight lost events (4% to 25%). The one that lost none used the 100&nbsp;µs receiver spin window at 400,000.
       I infer that the thread fell behind and the kernel dropped the datagrams that no longer fitted in its 4&nbsp;MiB receive buffer, but I did not read the kernel's drop counter.
       With the echo off, the thread used about half a core at 500,000 orders/s (about 1 million events per second) and lost none in three runs out of three. The printed line is the expensive part. A product that runs at load switches it off.</li>
 </ul>
+<p>
+  <strong>Run length.</strong> The runs above 100,000 orders/s are short on purpose. The measurement product keeps each order token in a fixed table.
+  At commit c6e1212 (the 50,000 orders/s table) the table slowed to milliseconds per order after about 2.6 million orders, so that table uses only the windows before that point.
+  From commit df58d8b it stops registering at 1,835,008 tokens (7/8 of 2<sup>21</sup>) and rejects further new orders. This order mix registers a token for about 80% of its orders, so a run stays under the new limit up to about 2.3 million orders.
+  I kept every run after the rework at or below 2.0 million. The limit belongs to that product, not to Core.
+</p>
 
 <!-- =====================================================================
      LIMITS
@@ -703,13 +707,10 @@
 <div class="note limit"><b class="tag">ELECTION MODEL</b>
   Leadership is decided by a central arbiter with a fencing token, not by a consensus protocol among the replicas. The arbiter recomputes only when a heartbeat arrives.</div>
 <div class="note limit"><b class="tag">EGRESS GATEWAY CAPACITY</b>
-  One thread receives, encodes and delivers every event. With the console echo on, it ran at over 90% of a core from 300,000 orders/s, and at 400,000 and 500,000 the gateway lost events (4% to 25% in the runs I made).
+  One thread receives, encodes and delivers every event. With the console echo on, it ran at over 90% of a core from 300,000 orders/s, and in 8 of 9 runs at 400,000 and 500,000 the gateway lost events (4% to 25%).
   With the echo off it used about half a core at 500,000 orders/s and lost none. The gateway counts the events that never arrived, from the ordinals, and warns at most once a second, but it cannot recover them. Publishing from every replica would not fix this, because the extra copies would arrive at the same socket and thread.</div>
 <div class="note limit"><b class="tag">IDLE COST</b>
   Three threads per replica spin at 100% whether or not any traffic arrives, so two replicas keep about six cores busy at idle. That is the price of the busy-polling design, and it is not tuned or pinned.</div>
-<div class="note limit"><b class="tag">PRODUCT CAPACITY</b>
-  The reference product's order-token table holds about 2.1 million tokens and never shrinks. Once it fills, every order takes milliseconds, so a long run of a new-order-heavy mix stops being a throughput test.
-  Core is not involved, but it caps how long a run at a high rate can be.</div>
 <div class="note limit"><b class="tag">TRACE ARENA</b>
   The arena has 2<sup>20</sup> slots. A command that rests long enough for the ring to wrap loses its timing record; a collision counter makes that visible but can't prevent it.</div>
 <div class="note limit"><b class="tag">CLOCKS</b>
@@ -726,6 +727,7 @@
 <pre class="code">cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure</pre>
+<p>The benchmarks are not part of the default build. Add <code>-DTOYEXCHANGE_BENCHMARKS=ON</code> to the first command and build the <code>IngressBench</code> target.</p>
 
 <footer>
   DRAFT · every measurement here is from one machine under WSL2; every yellow box is a number or check still owed.

@@ -6,7 +6,7 @@
   <div class="box">
     <div class="kv"><span class="k">SUBTITLE:</span> <span class="v">A limit order book for binary-outcome event contracts (prices 0–100), speaking NASDAQ OUCH 4.2</span></div>
     <div class="kv"><span class="k">STATUS:</span> <span class="v warn">DRAFT — built, tested and measured on one machine</span></div>
-    <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.10.14</span></div>
+    <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.10.16</span></div>
     <div class="kv"><span class="k">STACK:</span> <span class="v">C++20 · NASDAQ OUCH 4.2 · built on ToyExchange Core · googletest</span></div>
     <div class="kv"><span class="k">SOURCE:</span>
       <a href="https://github.com/infinite-simplex/EventContractLOB" target="_blank">→ EventContractLOB</a> &nbsp;
@@ -102,7 +102,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
   <li><strong>Every fill is two events</strong> — one per side — sharing a <code>match_id</code>, and event sequence numbers only ever increase.</li>
   <li><strong>Self-trade prevention is a hard stop.</strong> If the next resting order at the front of the line belongs to the aggressor's own firm, the aggressor's remainder is rejected with <code>SELF_TRADING_PREVENTION</code> and the resting order is left alone.
       Fills against other firms that came earlier in the queue still happen first. Fill-or-kill's liquidity count applies the same stop.</li>
-  <li><strong>Every rejection names its reason:</strong> unknown order, invalid quantity, self-trade, insufficient liquidity, price out of range, unknown symbol.</li>
+  <li><strong>Every rejection names its reason:</strong> unknown order, invalid quantity, self-trade, insufficient liquidity, price out of range, unknown symbol, and the three capacity limits (order ids used up, book side full, token table full).</li>
 </ul>
 
 <figure class="fig" id="figSweep">
@@ -250,8 +250,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
      ===================================================================== -->
 <h2 id="results">RESULTS</h2>
 <p>
-  Engine-side numbers only; queuing, network and failover figures are on the
-  <a href="#" data-project="TOY EXCHANGE CORE">Core page</a>. <strong>One machine:</strong> AMD Ryzen 7 5800X (16 threads), Ubuntu 22.04 on WSL2, GCC 11.4 at <code>-O3 -march=native</code>, Core v0.3.0. The gateway, two replicas, performance service and load generator all share that host over loopback, with no CPU pinning, and the machine was otherwise idle. Unless a row says "tuned", Core's defaults ran. "Tuned" is the two settings Core advises for load: each replica's receiver polls for 100 µs after a datagram before it sleeps, and the gateway prints no console line per event.
+  Engine-side numbers, and whether the stack kept up at higher rates. <strong>One machine:</strong> AMD Ryzen 7 5800X (16 threads), Ubuntu 22.04 on WSL2, GCC 11.4 at <code>-O3 -march=native</code>, Core v0.3.0. The gateway, two replicas, performance service and load generator all share that host over loopback, with no CPU pinning, and the machine was otherwise idle. Unless a row says "tuned", Core's defaults ran. "Tuned" is the two settings Core advises for load: each replica's receiver polls for 100 µs after a datagram before it sleeps, and the gateway prints no console line per event.
 </p>
 
 <h3>Under load</h3>
@@ -274,25 +273,25 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
 
 <h3>Higher rates</h3>
 <p>
-  The same test at higher rates, once with Core's defaults and once tuned, two runs each (three at 10,000 and at 500,000). The 500,000 runs last 4 seconds because the order-token table holds about 2 million orders' worth (see the limits). An egress event is "lost" when the gateway's per-event numbering shows that it never arrived; Core counts and warns about them but does not recover them. The engine columns are the median window's p50 and p99 of <code>EngineExecutionNs</code>, in ns.
+  The same test at higher rates, once with Core's defaults and once tuned, two runs each (three at 10,000 and at 500,000). No run sends more than 2 million orders, because the order-token table holds about 2.3 million orders' worth (see the limits), so the higher the rate the shorter the run. An egress event is "lost" when the gateway's per-event numbering shows that it never arrived; nothing recovers it. The engine columns are the median window's p50 and p99 of <code>EngineExecutionNs</code>, in ns.
 </p>
 <div class="tscroll">
 <table class="spec">
-  <thead><tr><th>Target orders/s</th><th>Defaults: reached</th><th>egress events lost</th><th>engine p50 / p99</th><th>Tuned: reached</th><th>egress events lost</th><th>engine p50 / p99</th></tr></thead>
+  <thead><tr><th>Target orders/s · length</th><th>Defaults: reached</th><th>egress events lost</th><th>engine p50 / p99</th><th>Tuned: reached</th><th>egress events lost</th><th>engine p50 / p99</th></tr></thead>
   <tbody>
-    <tr><td class="n">10,000</td><td>10,000</td><td>0</td><td>90 / 470</td><td>10,000</td><td>0</td><td>100 / 575</td></tr>
-    <tr><td class="n">50,000</td><td>49,998</td><td>0</td><td>80 / 390</td><td>49,998</td><td>0</td><td>75 / 365</td></tr>
-    <tr><td class="n">100,000</td><td>99,994</td><td>0</td><td>75–80 / 360–365</td><td>99,994</td><td>0</td><td>75 / 315</td></tr>
-    <tr><td class="n">200,000</td><td>199,976</td><td>0</td><td>75 / 340–350</td><td>199,977</td><td>0</td><td>75 / 320</td></tr>
-    <tr><td class="n">500,000</td><td>321,500–334,943</td><td>1,037–58,455</td><td>75–80 / 355–390</td><td>499,841–499,847</td><td>0</td><td>75 / 295</td></tr>
+    <tr><td class="n">10,000 · 30 s</td><td>10,000</td><td>0</td><td>90 / 470</td><td>10,000</td><td>0</td><td>100 / 575</td></tr>
+    <tr><td class="n">50,000 · 30 s</td><td>49,998</td><td>0</td><td>80 / 390</td><td>49,998</td><td>0</td><td>75 / 365</td></tr>
+    <tr><td class="n">100,000 · 20 s</td><td>99,994</td><td>0</td><td>75–80 / 360–365</td><td>99,994</td><td>0</td><td>75 / 315</td></tr>
+    <tr><td class="n">200,000 · 10 s</td><td>199,976</td><td>0</td><td>75 / 340–350</td><td>199,977</td><td>0</td><td>75 / 320</td></tr>
+    <tr><td class="n">500,000 · 4 s</td><td>321,500–334,943</td><td>1,037–58,455</td><td>75–80 / 355–390</td><td>499,841–499,847</td><td>0</td><td>75 / 295</td></tr>
   </tbody>
 </table>
 </div>
 <p>
-  In all 24 runs the leader never changed, no sequence gap needed repair and both replicas ended with identical books. With the defaults the gateway's console echo saturates its egress thread near 330,000 orders a second, which is where events start to be lost; tuned, the full 500,000 went through. Tuning costs a little at the low end: at 10,000 a second the receivers spin on cores the matching threads also use, so the median is 100 ns against 90 and the p99.99 is 9.5 to 14.9 µs against a median of 2.1.
+  In all 24 runs the leader never changed, no sequence gap needed repair and both replicas ended with identical books. With the defaults the stack took in only about 330,000 orders a second at the 500,000 target and lost egress events; tuned, the full 500,000 went through with none lost. The two settings were not run separately, so these runs do not say which one matters. Tuning costs a little at the low end: at 10,000 a second the median is 100 ns against 90 and the p99.99 is 9.5 to 14.9 µs against 2.1 µs (1.7 to 11.8).
 </p>
 <p>
-  <strong>Allocation.</strong> A preloaded <code>malloc</code> counter over 14 seconds at 50,000 orders a second (about 700,000 orders) found none in either replica or the performance service, and 404 in the gateway when tuned, all of them Core's arbiter growing its heartbeat history, a count that follows the number of replicas and not the orders. With the console echo on, the gateway also allocates once per egress batch, to copy the line buffer it prints (128,812 in the same window). The encoder holds each 30-byte frame inline, so it allocates nothing.
+  <strong>Allocation.</strong> Nothing on the matching path allocates. A preloaded <code>malloc</code> counter over 14 seconds at 50,000 orders a second (about 700,000 orders) found no allocation in either replica, and none from the protocol handler or the encoder in the gateway; the encoder holds each 30-byte frame inline. Not exercised: the load generator sends no good-till-day orders, and a timed cancel is queued on the cancel service's own thread, in a <code>std::priority_queue</code> that allocates as it grows.
 </p>
 
 <h3>One level, in process</h3>
@@ -311,12 +310,12 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
 </table>
 </div>
 <p>
-  Depth does not matter while a level's orders sit together; scattered, the cost rises once a level outgrows the cache, and at 100,000 deep it swings between runs (52–125 ns for a sweep). Every fill emits two events and stamps each with a clock read, which is part of the 38 ns.
+  Depth does not matter while a level's orders sit together; scattered, the cost rises once a level outgrows the cache, and at 100,000 deep it swings between runs (52–125 ns for a sweep). Every fill emits two events and stamps each with a clock read, and those reads are most of the 38 ns: in a scratch build with the clock replaced by a counter (two runs), the same sequential sweeps cost 4 to 6 ns an order and the single-share trades 8 to 11 ns.
 </p>
 
 <h3>Sustained, in process</h3>
 <p>
-  <code>EngineThroughput</code> replays a generated stream through the real book for 30 seconds per row, with no gateway or sockets. The stream is 44% passive limit orders, 8% marketable, 7% IOC, 30% cancels and 10% replaces; every cancel and replace names a resting order, and the book is held at the depth shown. Each cycle must emit the predicted number of events and end with an empty book. Threads are pinned, and the three 50,000-deep runs agree within 1%.
+  <code>EngineThroughput</code> replays a generated stream through the real book for 30 seconds per row, with no gateway or sockets. The stream is about 44% passive limit orders, 8% marketable, 7% IOC, 30% cancels and 10% replaces (rounded shares of the commands); every cancel and replace names a resting order, and the book is held at the depth shown. Each cycle must emit the predicted number of events and end with an empty book. Threads are pinned, and the three 50,000-deep runs agree within 1%.
 </p>
 <div class="tscroll">
 <table class="spec">

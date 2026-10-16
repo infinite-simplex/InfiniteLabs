@@ -4,15 +4,15 @@
 <header class="hero">
   <div class="box">
     <div class="kv"><span class="k">SUBTITLE:</span> <span class="v">The product-agnostic half of an exchange: sequenced ingress, replicated matching, epoch-fenced egress, and a measurement path</span></div>
-    <div class="kv"><span class="k">STATUS:</span> <span class="v warn">DRAFT — measurements not yet filled in</span></div>
-    <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.10.14</span></div>
+    <div class="kv"><span class="k">STATUS:</span> <span class="v warn">DRAFT — single-host measurements only; PTP across two hosts not yet verified</span></div>
+    <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.10.16</span></div>
     <div class="kv"><span class="k">STACK:</span> <span class="v">C++20 · header-only CMake library · Linux (epoll, mmap, multicast, CLOCK_TAI) · HdrHistogram_c · googletest</span></div>
     <div class="kv"><span class="k">SOURCE:</span>
       <a href="https://github.com/infinite-simplex/ToyExchange" target="_blank">→ ToyExchange</a> &nbsp;
       <a href="https://github.com/infinite-simplex/EventContractLOB" target="_blank">→ EventContractLOB (reference product)</a> &nbsp;
       <a href="https://github.com/infinite-simplex/BatchGPU" target="_blank">→ BatchGPU (second product)</a>
     </div>
-    <div class="kv"><span class="k">JUMP TO:</span> <a href="#overview">overview</a> · <a href="#order-path">order-path</a> · <a href="#fault-tolerance">fault-tolerance</a> · <a href="#telemetry">telemetry</a> · <a href="#performance">performance</a> · <a href="#results">results</a> · <a href="#limits">limits</a> · <a href="#build">build</a></div>
+    <div class="kv"><span class="k">JUMP TO:</span> <a href="#overview">overview</a> · <a href="#order-path">order-path</a> · <a href="#fault-tolerance">fault-tolerance</a> · <a href="#telemetry">telemetry</a> · <a href="#performance">performance</a> · <a href="#aeron">aeron</a> · <a href="#results">results</a> · <a href="#limits">limits</a> · <a href="#build">build</a></div>
     <div class="kv"><span class="k">OPEN TODOs:</span> <span class="v warn" id="todoCount">…</span></div>
     <details id="todoIndex"><summary>list all placeholders</summary><ol id="todoList"></ol></details>
   </div>
@@ -249,12 +249,16 @@
 
 <h3>What is tested</h3>
 <ul>
-  <li><strong>Core's own suite — 46 tests.</strong> Replica arbitration (the first heartbeat becomes leader at epoch 1; leadership is sticky and a returning lower id doesn't bump the epoch; the epoch bumps on failover; the lowest eligible id wins;
+  <li><strong>Core's own suite — 56 tests.</strong> Replica arbitration (the first heartbeat becomes leader at epoch 1; leadership is sticky and a returning lower id doesn't bump the epoch; the epoch bumps on failover; the lowest eligible id wins;
       healthy replicas that report at different moments at 500,000 commands/s do not demote the leader; a leader that stops advancing loses leadership only after a full lag window),
       the synced clock (matches wall time, monotonic), windowed histograms, aggregation (per-replica routing, incomplete timestamp pairs ignored), one end-to-end forwarder → receiver → aggregator test over the wire,
-      seven gateway tests, and twenty-six ingress-recovery tests. The gateway tests run the real gateway, receiver and sequence store with a stand-in wire protocol: commands reach a replica in order and are stored;
+      seven gateway tests, ten egress tests, and twenty-six ingress-recovery tests. The gateway tests run the real gateway, receiver and sequence store with a stand-in wire protocol: commands reach a replica in order and are stored;
       a frame split across reads parses once; each connection gets its own session id; a broken frame closes the connection but earlier frames stay sequenced; every record is in the store before its datagram reaches the network;
       commands from one read share few datagrams; and a command that arrives alone is sent at once, never held for others.
+      The egress tests run the real publisher, gateway, arbiter and heartbeat clients with a stand-in event, encoder and session gateway: only the leader publishes; a follower keeps draining its queue and sends nothing;
+      a replica that becomes leader publishes from then on, but not what it discarded before; each event reaches its session and the public feed in order, and a session that has gone does not stop the feed;
+      a message from an older epoch is dropped, including a deposed leader's late message after a failover; a short datagram is ignored; and when the leader dies the survivor is told it leads and takes over, with no second copy while both were up.
+      Breaking the fencing check, the leader check, or the follower's draining each fails exactly the tests that should catch it.
       The ingress-recovery tests run the real sequence store, retransmit server and multicast receiver with a stand-in command type: a datagram of many records behaves like many datagrams of one
       (records already delivered are skipped, a datagram that starts past the next expected record recovers the gap first, a torn datagram is dropped); the retransmit server answers a range in few datagrams and ends it with one status datagram;
       a receiver with a spin window delivers in order, still sleeps after a quiet spell, and still probes when idle; late join and restart replay the full history in order;
@@ -263,8 +267,7 @@
       duplicated, late and reordered live datagrams are applied once; and the idle probe catches up a late joiner, or the lost tail of a burst, with no live message, resumes at a record lost mid-reply, stops on evicted history, and survives an unreachable server; the receiver applies the configured 4 MiB receive buffer, and a request that the kernel cap clips is reported as clipped.
       The tests use small rings (1,024 slots) to stay fast; the boundary is the same arithmetic at 2<sup>20</sup>.</li>
   <li><strong>Through the reference product.</strong> The gateway end to end over a real wire protocol, trace-arena collision detection, and the leader-gating of timed cancels are exercised by EventContractLOB's tests,
-      which also repeat gap recovery with a real command type. Core has no stand-in for the egress event and encoder.
-      <span class="todo">add a Core-level test double for the egress so that machinery is tested in this repository</span></li>
+      which also repeat gap recovery with a real command type. Core's own tests use stand-ins for the wire protocol, the command and the egress event, so none of this machinery depends on a product to be tested.</li>
 </ul>
 
 <!-- =====================================================================
@@ -333,7 +336,12 @@
     <h4>Busy-polling matching thread</h4>
     <p>The matching thread spins on <code>try_pop</code> with no sleep or yield.</p>
     <p class="buys"><span class="lbl">BUYS</span> No wake-up latency when a command arrives.</p>
-    <p class="costs"><span class="lbl">COSTS</span> A core at 100% even when idle. The code does no CPU pinning or scheduler tuning. <span class="todo">measure idle CPU use and whether pinning changes tail latency</span></p>
+    <p class="costs"><span class="lbl">COSTS</span> A core at 100% even when idle. Measured with no traffic: each replica uses about 302% of a core, because its matching thread, egress publisher and telemetry forwarder (identified by start order) all spin at 100%.
+      The gateway uses 3%, so a stack with two replicas uses about 607% of one core out of 16 hardware threads. The optional receiver spin window adds nothing at idle.</p>
+    <p class="costs"><span class="lbl">PINNING</span> The code does no CPU pinning or scheduler tuning. I tried pinning each process with <code>taskset</code> (gateway on two cores, each replica on three whole cores plus one sibling thread) at 50,000 orders/s, three 30-second runs each.
+      It made no clear difference. <code>NetworkDelayNs</code> p99 was 530&nbsp;µs pinned against 649&nbsp;µs unpinned (medians), with the run-to-run ranges overlapping slightly. The queuing-delay p50 and p99, the queue depth and the engine time matched within the spread.
+      A deliberately crowded control, with every process on two cores, was clearly worse: queuing-delay p99 of 3.8&nbsp;ms and 8 leader changes, so the comparison can see an effect when there is one.
+      This was pinning by process, not by thread, on a machine with cores to spare; per-thread pinning and busier loads are untested.</p>
     <p class="where">Core/MatchingService.inl · poll()</p>
   </div>
 
@@ -416,42 +424,178 @@
 </figure>
 
 <!-- =====================================================================
-     RESULTS
+     AERON
      ===================================================================== -->
-<h2 id="results">RESULTS</h2>
+<h2 id="aeron">WHY NOT AERON</h2>
 <p>
-  Nothing in this section has been measured yet — every number is a placeholder to be filled from real runs. The tool to collect them exists:
-  <code>PerformanceServiceApp</code> prints per-replica percentile tables once per window. Engine-side numbers (<code>EngineExecutionNs</code> and the product counters) belong to the product; see
-  <a href="#" data-project="EVENT CONTRACT LOB">EventContractLOB</a> and <a href="#" data-project="BATCH GPU">BatchGPU</a>.
+  <a href="https://github.com/aeron-io/aeron" target="_blank">Aeron</a> is the established open-source transport for a design like this one, so the obvious question is why the networking here is hand-written.
+  To find out, I built a second transport on Aeron 1.53.3 (its C media driver and C++ client) and ran both through the same benchmark. The benchmark uses the real gateway, a TCP client that sends at a fixed rate,
+  and a consumer thread on each replica that checks it sees every command once and in order, and times it. The harness is in the repository's <code>Benchmarks/</code> directory.
+  The Aeron transport is an experiment. It is not part of Core.
+</p>
+
+<h3>What each side gives you</h3>
+<div class="tscroll">
+<table class="spec">
+  <thead><tr><th>Need</th><th>Core as built</th><th>Aeron out of the box</th></tr></thead>
+  <tbody>
+    <tr><td class="n">Fan-out to replicas</td><td>One multicast datagram per batch, sent by the gateway thread</td><td>A publication. A separate media driver process sends it</td></tr>
+    <tr><td class="n">Recover a lost packet</td><td>The replica sees a gap and fetches it from the sequence store</td><td>The driver asks the sender to resend, but only from its term buffer (16&nbsp;MB × 3 by default)</td></tr>
+    <tr><td class="n">Late join or restart</td><td>Replay from sequence 0 through the retransmit server</td><td>None. A new subscriber starts at the live position. Replay needs the Archive, which is a Java process</td></tr>
+    <tr><td class="n">A slow replica</td><td>Slows nobody else, and catches up from the store</td><td>You choose: lose its stream (<code>fc=max</code>) or hold everyone back (<code>fc=min</code>, and the default on shared memory)</td></tr>
+    <tr><td class="n">Idle cost</td><td>Receivers block. The optional spin window spins only after traffic</td><td>Driver threads: 1% of a core with backoff, 100% to 300% with spinning</td></tr>
+    <tr><td class="n">Extra processes</td><td>None</td><td>One media driver per host</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>What the benchmark showed</h3>
+<p>
+  One machine: AMD Ryzen 7 5800X under WSL2, loopback, every process on one host. Records are 128 bytes, so ten fit in one datagram. Each cell is the median of three 5-second runs.
+  The Aeron UDP rows use one media driver per replica, which is how separate hosts behave. Two replicas that share one driver also share one received stream, and that hides the slow-replica problem below.
 </p>
 
 <div class="tscroll">
 <table class="spec">
-  <thead><tr><th>Pipeline metric</th><th>p50</th><th>p99</th><th>p99.9</th><th>max</th></tr></thead>
+  <thead><tr><th>500,000 commands/s</th><th>2 replicas: p50 / p99</th><th>3 replicas: p50 / p99</th></tr></thead>
   <tbody>
-    <tr><td class="n">QueuingDelayNs</td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td></tr>
-    <tr><td class="n">NetworkDelayNs</td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td></tr>
-    <tr><td class="n">InboundQDepth</td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td><td><span class="todo">value</span></td></tr>
+    <tr><td class="n">Core, blocking receivers</td><td>cannot keep up (232,000/s)</td><td>a replica gives up</td></tr>
+    <tr><td class="n">Core, 100&nbsp;µs spin window</td><td>38 / 201&nbsp;µs</td><td>48 / 261&nbsp;µs</td></tr>
+    <tr><td class="n">Aeron over UDP, spinning</td><td>63 / 403&nbsp;µs</td><td>73 / 648&nbsp;µs</td></tr>
+    <tr><td class="n">Aeron over UDP, backoff</td><td>152 / 449&nbsp;µs</td><td>149 / 674&nbsp;µs</td></tr>
+    <tr><td class="n">Aeron over shared memory (one host only)</td><td>39 / 107&nbsp;µs</td><td>40 / 194&nbsp;µs</td></tr>
   </tbody>
 </table>
 </div>
+<p>
+  With two replicas, the hand-written transport and Aeron over UDP both top out near 1.3 million commands per second. Shared memory kept up at 3 million, but only works between processes on one host.
+</p>
+
+<div class="tscroll">
+<table class="spec">
+  <thead><tr><th>Scenario</th><th>Core</th><th>Aeron</th></tr></thead>
+  <tbody>
+    <tr><td class="n">One replica's consumer stalls for 1.5&nbsp;s at 500,000/s</td>
+        <td>The other replica is unaffected (p50 about 40&nbsp;µs). The stalled one recovers and nothing is missing</td>
+        <td><code>fc=max</code>: the other replica is unaffected, but the stalled one never recovers (about 1.4 million commands missing, no error).
+            <code>fc=min</code>: the other replica is delayed by about 1.45&nbsp;s. Shared memory: about 1&nbsp;s</td></tr>
+    <tr><td class="n">A replica joins 2&nbsp;s into a run at 300,000/s</td>
+        <td>Replays the whole history in order. Nothing is missing</td>
+        <td>Starts near sequence 900,000, sees a gap from 0, and gives up</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Why the hand-written transport stays</h3>
+<ul>
+  <li><strong>It was not slower.</strong> Over UDP, Aeron's median latency was 63 to 73&nbsp;µs against 38 to 48&nbsp;µs at 500,000 commands/s, and the two have the same ceiling here.</li>
+  <li><strong>It does not replace the store.</strong> A late or lagging replica cannot catch up from an Aeron stream. Using Aeron would mean keeping the sequence store and retransmit server anyway, so there would be two recovery paths for one problem.</li>
+  <li><strong>A custom flow control would only recreate half of it.</strong> Aeron lets you write one, and one could keep a slow replica from holding the sequencer back. That is the property the hand-written design already has. Catching up is a separate problem that flow control cannot solve.
+      The plug-in would also run inside the media driver and depend on its internals.</li>
+  <li><strong>It adds a process per host and a decision about spinning.</strong> The fast driver settings keep one to three cores busy even when idle.</li>
+  <li><strong>Where Aeron would earn its place:</strong> links between processes on one host, where shared memory is far faster, and the Archive if replay needs to outlive the sequence store's ring.</li>
+</ul>
+
+<div class="note limit"><b class="tag">LIMITS OF THIS TEST</b>
+  One machine under WSL2, so tail latencies include hypervisor noise. The C driver, not the Java one. No core pinning, jumbo frames or kernel bypass, and the Aeron rig is not tuned beyond a few driver settings.
+  Nothing here was run across two real hosts. A hybrid, with Aeron for live traffic and the sequence store for catch-up, was not built or measured.
+  The result is for this design on this setup, not a general claim about Aeron.</div>
+
+<!-- =====================================================================
+     RESULTS
+     ===================================================================== -->
+<h2 id="results">RESULTS</h2>
+<p>
+  These are the first end-to-end numbers. Every process ran on one machine, in one WSL2 virtual machine: the gateway, two replicas, <code>PerformanceServiceApp</code>, and the reference product's load generator.
+  The generator sends a seeded mix of limit orders (55%), immediate-or-cancel orders (15%), cancels (20%) and replaces (10%), in 1&nbsp;ms bursts.
+  Each cell is the median, over the one-second windows of both replicas, of that window's percentile. The max column is the largest value in any window. The first three windows and the last one are dropped.
+  Engine-side numbers (<code>EngineExecutionNs</code> and the product counters) belong to the product; see
+  <a href="#" data-project="EVENT CONTRACT LOB">EventContractLOB</a> and <a href="#" data-project="BATCH GPU">BatchGPU</a>.
+  For scale, the engine's own execution time in the same run was 80&nbsp;ns at p50 and 350&nbsp;ns at p99.
+</p>
+
+<h3>At 50,000 orders/s</h3>
+<p>100 windows (50 per replica) from a 60-second run, taken before the product's token-table limit described below.</p>
+<div class="tscroll">
+<table class="spec">
+  <thead><tr><th>Pipeline metric</th><th>p50</th><th>p99</th><th>p99.99</th><th>max</th></tr></thead>
+  <tbody>
+    <tr><td class="n">NetworkDelayNs <span style="opacity:.7">(gateway reads the command → replica queues it)</span></td><td>139&nbsp;µs</td><td>490&nbsp;µs</td><td>1.02&nbsp;ms</td><td>25.2&nbsp;ms</td></tr>
+    <tr><td class="n">QueuingDelayNs <span style="opacity:.7">(time in the replica's inbound queue)</span></td><td>1.0&nbsp;µs</td><td>7.9&nbsp;µs</td><td>81&nbsp;µs</td><td>356&nbsp;µs</td></tr>
+    <tr><td class="n">InboundQDepth <span style="opacity:.7">(commands)</span></td><td>5</td><td>15</td><td>39</td><td>233</td></tr>
+  </tbody>
+</table>
+</div>
+<p>
+  <code>PerformanceServiceApp</code> prints p99.99, not p99.9, so that is the column here. <code>NetworkDelayNs</code> is not a network latency in this run. Everything shares one machine and one clock.
+  The generator sends in 1&nbsp;ms bursts, and a command waits for the commands ahead of it in its burst, so the figure includes that wait as well as the multicast hop.
+</p>
+
+<h3>At 100,000 orders/s</h3>
+<p>24 windows from a 15-second run.</p>
+<div class="tscroll">
+<table class="spec">
+  <thead><tr><th>Pipeline metric</th><th>p50</th><th>p99</th><th>p99.99</th><th>max</th></tr></thead>
+  <tbody>
+    <tr><td class="n">NetworkDelayNs</td><td>167&nbsp;µs</td><td>8.8&nbsp;ms</td><td>11.5&nbsp;ms</td><td>12.5&nbsp;ms</td></tr>
+    <tr><td class="n">QueuingDelayNs</td><td>1.0&nbsp;µs</td><td>15.4&nbsp;ms</td><td>18.0&nbsp;ms</td><td>22.5&nbsp;ms</td></tr>
+    <tr><td class="n">InboundQDepth <span style="opacity:.7">(commands)</span></td><td>5</td><td>about 1,024 (full)</td><td>about 1,024 (full)</td><td>about 1,024 (full)</td></tr>
+  </tbody>
+</table>
+</div>
+<p>
+  The median is unchanged, but the tail is milliseconds: the replicas' inbound queues repeatedly fill, and the leader changes about three times a second at this rate (see below).
+</p>
 
 <div class="tscroll">
 <table class="spec" style="margin-top:16px">
   <thead><tr><th>Other figures</th><th>Value</th></tr></thead>
   <tbody>
-    <tr><td class="n">Sustained command rate (gateway / replica)</td><td><span class="todo">commands per second, and what limited it</span></td></tr>
-    <tr><td class="n">Failover: leader killed → survivor publishes</td><td><span class="todo">observed time; the 10 ms stale-after default is a configured detection window, not the measured recovery time</span></td></tr>
-    <tr><td class="n">Test hardware</td><td><span class="todo">CPU model, core count, RAM, and whether this is WSL or bare metal</span></td></tr>
-    <tr><td class="n">Topology of the run</td><td><span class="todo">single host or multiple hosts — decides whether the cross-machine metrics are valid</span></td></tr>
-    <tr><td class="n">Build</td><td>Release: <code>-O3 -march=native -mtune=native -Wall -Wextra -pthread</code>. Local build: GCC 11.4, CMake 3.22 (Ubuntu 22.04 on WSL).</td></tr>
+    <tr><td class="n">Sustained command rate (gateway / replica)</td><td>
+      <strong>500,000 orders/s for 3&nbsp;s</strong> (1.5 million orders), in three runs out of three, with identical books on both replicas. The replicas apply whatever the gateway sequences.
+      Longer runs: 100,000 orders/s for 15&nbsp;s, and 60,000 orders/s for 20&nbsp;s with stable leadership.
+      Runs at the higher rates cannot be longer with this order mix, because of the product's token table (below). What limited the rate is listed after this table.</td></tr>
+    <tr><td class="n">Failover: leader killed → survivor publishes</td><td>
+      <strong>Median 11.4&nbsp;ms</strong> (range 9.1 to 14.1&nbsp;ms) over five kills at 20,000 orders/s. This is the time from <code>SIGKILL</code> of the leader to the first egress datagram from the survivor,
+      which is consistent with the 10&nbsp;ms stale-after window plus a heartbeat interval. Results produced while the survivor was still a follower are not re-sent, because egress has no gap-fill.
+      The public market-data feed showed no gap; the likely reason is that the gateway's one egress thread was still working through the dead leader's backlog.</td></tr>
+    <tr><td class="n">Test hardware</td><td>AMD Ryzen 7 5800X (8 cores, 16 threads), 32&nbsp;GB RAM. Run under WSL2 (WSL 3.0.3, Linux 6.18.54, Ubuntu 22.04) with 16&nbsp;GB. Not bare metal. No core pinning.</td></tr>
+    <tr><td class="n">Topology of the run</td><td>One host. The gateway, both replicas, the performance service and the load generator all ran in the same virtual machine. The multicast groups ran over its own network interface.
+      One clock serves every process, so the cross-machine metrics are valid arithmetic here, but they do not measure a network.</td></tr>
+    <tr><td class="n">Build</td><td>Release: <code>-O3 -march=native -mtune=native -Wall -Wextra -pthread</code>. Core v0.2.1 plus an unreleased gateway change (a fan-out template parameter whose default is unchanged);
+      EventContractLOB at commit c6e1212. GCC 11.4, CMake 4.4 (Ubuntu 22.04 on WSL2).</td></tr>
   </tbody>
 </table>
 </div>
 
+<h3>One window</h3>
 <p>
-  <span class="todo">paste one representative PerformanceServiceApp window here, and note the load that produced it</span>
+  Replica 1, the 30th one-second window of the 60-second run at 50,000 orders/s. Values are nanoseconds, except the depth and the product counters.
+  <code>engine_exec_ns</code> counts about half as many commands as the other metrics; the reason has not been traced.
 </p>
+<pre class="code">[perf] replica=1 metric=engine_exec_ns n=25016 min=40 max=31855 p50=80 p99=360 p99.99=9351
+[perf] replica=1 metric=network_delay_ns n=50211 min=27312 max=997887 p50=133503 p99=352255 p99.99=996351
+[perf] replica=1 metric=queuing_delay_ns n=50235 min=65 max=109055 p50=1081 p99=9375 p99.99=107647
+[perf] replica=1 metric=inbound_q_depth n=50248 min=0 max=42 p50=5 p99=15 p99.99=37
+[perf] replica=1 metric=inbound_q_submit_cycles n=50248 min=38 max=20447 p50=76 p99=304 p99.99=14751
+[perf] replica=1 metric=ext_counter_0 n=50237 min=0 max=13 p50=0 p99=6 p99.99=11
+[perf] replica=1 metric=ext_counter_1 n=50237 min=0 max=18 p50=0 p99=9 p99.99=16</pre>
+
+<h3>What limited the rate</h3>
+<p>The engine itself is not the limit: its execution time was 80&nbsp;ns at p50 in both tables above, and at most 11&nbsp;µs at p99. At 100,000 orders/s the replicas' inbound queues do fill from time to time, and I did not find out why.
+  Four things limited the rate or the stability, each found by changing one thing and rerunning.</p>
+<ul>
+  <li><strong>The product's token table.</strong> The reference product's gateway keeps a fixed table of 2<sup>21</sup> slots that maps order tokens to ids. It only grows. This order mix fills it after about 2.6 million orders.
+      A 60-second run at 50,000 orders/s reached that at 53&nbsp;s: the replica's rate fell from 50,000 to about 300 orders/s, the engine's p50 stayed under 200&nbsp;ns, and <code>NetworkDelayNs</code> rose from 140&nbsp;µs to over 100&nbsp;ms.
+      Run on its own, the table inserts in about 170&nbsp;ns up to 1.9 million tokens and takes 92&nbsp;µs per insert at 2.1 million. This belongs to the product, not to Core. It is why the runs at 200,000 orders/s and above look like a collapse when they are long enough.</li>
+  <li><strong>Leadership under load.</strong> With the replicas publishing egress, the leader changed 47 to 84 times in every run from 100,000 to 500,000 orders/s, and 6 times at 70,000. It did not change at 60,000 and below.
+      In a scratch build with replica egress switched off, it changed zero times at every rate up to 500,000. Widening the arbiter's windows to 100 and 200&nbsp;ms, or switching off the gateway's console printing, did not stop it.
+      The mechanism is not established.</li>
+  <li><strong>Waking sleeping replicas.</strong> With replica egress off and blocking receivers, the gateway ingested only 320,000 to 347,000 orders/s in three runs out of three, and its ingress thread spent 91% of its time in the kernel.
+      With receivers that spin for 100&nbsp;µs it ingested 500,000 orders/s in three runs out of three (the optional spin window). With egress on, the stock stack also reached 500,000; why switching egress off made blocking ingest slower is not explained.</li>
+  <li><strong>One egress thread.</strong> The gateway's egress thread (identified by thread start order) was at about 100% of a core at 50,000 orders/s while it printed every event to the console, and at about 55% at 200,000 with printing off.
+      Egress is the next place to work: events are sent one datagram each, acks one write each, and none of it is batched.</li>
+</ul>
 
 <!-- =====================================================================
      LIMITS
@@ -471,12 +615,20 @@
   It works only while the newest sequence number is at most the ring capacity minus one (2<sup>20</sup> − 1 by default); one more message evicts sequence 0, and the replica stops itself.</div>
 <div class="note limit"><b class="tag">ELECTION MODEL</b>
   Leadership is decided by a central arbiter with a fencing token, not by a consensus protocol among the replicas. The arbiter recomputes only when a heartbeat arrives.</div>
+<div class="note limit"><b class="tag">LEADERSHIP UNDER LOAD</b>
+  With the replicas publishing egress, the leader changed several times a second at 70,000 orders/s and above in every run on the test machine. Every change bumps the epoch, and results published around it can be lost, because egress has no gap-fill.
+  Switching replica egress off stopped the changes entirely, and widening the arbiter's windows did not. The cause is not established.</div>
+<div class="note limit"><b class="tag">IDLE COST</b>
+  Three threads per replica spin at 100% whether or not any traffic arrives, so two replicas keep about six cores busy at idle. That is the price of the busy-polling design, and it is not tuned or pinned.</div>
+<div class="note limit"><b class="tag">PRODUCT CAPACITY</b>
+  The reference product's order-token table holds about 2.1 million tokens and never shrinks. Once it fills, every order takes milliseconds, so a long run of a new-order-heavy mix stops being a throughput test.
+  Core is not involved, but it caps how long a run at a high rate can be.</div>
 <div class="note limit"><b class="tag">TRACE ARENA</b>
   The arena has 2<sup>20</sup> slots. A command that rests long enough for the ring to wrap loses its timing record; a collision counter makes that visible but can't prevent it.</div>
 <div class="note limit"><b class="tag">CLOCKS</b>
   Cross-machine timing depends on clock sync that has not been exercised across two real hosts yet.</div>
 <div class="note limit"><b class="tag">SCOPE</b>
-  One engine per replica process, and no measured performance claims yet.</div>
+  One engine per replica process. Every measurement on this page comes from one machine under WSL2, with every process on the same host.</div>
 
 <!-- =====================================================================
      BUILD
@@ -489,6 +641,6 @@ cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure</pre>
 
 <footer>
-  DRAFT · this page makes no measurement claims; every yellow box is a number or check still owed.
+  DRAFT · every measurement here is from one machine under WSL2; every yellow box is a number or check still owed.
 </footer>
 </div>

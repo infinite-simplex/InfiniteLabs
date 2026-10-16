@@ -68,7 +68,7 @@
 
 <h3>Egress</h3>
 <p>
-  The engine emits an event for every state change. Core's egress gateway encodes each one once and sends the same bytes to the originating client (private ack) and to the public group. The frame is a custom compact layout, not ITCH:
+  The engine emits an event for every state change. Core's egress gateway receives the leader's events in batches, encodes each one once and sends the same bytes to the originating client (private ack) and to the public group. A client gets the frames of one batch in a single write, and the public feed packs frames back to back into datagrams of up to 1,400 bytes, so a consumer finds the boundaries from the length prefix. The frame is a custom compact layout, not ITCH, and it is held inline, so encoding allocates nothing:
 </p>
 <pre class="code">[2B BE length][1B type][8B order id][1B side][1B price][4B qty][4B leaves qty][8B match id][1B reject reason]
 type: A accepted · J rejected · E executed · C canceled · U replaced · D deleted (declared, never emitted)</pre>
@@ -251,7 +251,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
 <h2 id="results">RESULTS</h2>
 <p>
   Engine-side numbers only; queuing, network and failover figures are on the
-  <a href="#" data-project="TOY EXCHANGE CORE">Core page</a>. <strong>One machine:</strong> AMD Ryzen 7 5800X (16 threads), Ubuntu 22.04 on WSL2, GCC 11.4 at <code>-O3 -march=native</code>, Core v0.2.1. The gateway, two replicas, performance service and load generator all share that host over loopback, with no CPU pinning.
+  <a href="#" data-project="TOY EXCHANGE CORE">Core page</a>. <strong>One machine:</strong> AMD Ryzen 7 5800X (16 threads), Ubuntu 22.04 on WSL2, GCC 11.4 at <code>-O3 -march=native</code>, Core v0.3.0. The gateway, two replicas, performance service and load generator all share that host over loopback, with no CPU pinning, and the machine was otherwise idle. Unless a row says "tuned", Core's defaults ran. "Tuned" is the two settings Core advises for load: each replica's receiver polls for 100 µs after a datagram before it sleeps, and the gateway prints no console line per event.
 </p>
 
 <h3>Under load</h3>
@@ -262,14 +262,37 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
 <table class="spec">
   <thead><tr><th>Metric</th><th>p50</th><th>p99</th><th>p99.99</th><th>max</th></tr></thead>
   <tbody>
-    <tr><td class="n">EngineExecutionNs</td><td>85 ns (85–90)</td><td>440 ns (420–445)</td><td>1.4 µs (1.2–8.0)</td><td>43 µs (34 µs–0.93 ms)</td></tr>
+    <tr><td class="n">EngineExecutionNs</td><td>90 ns (85–90)</td><td>470 ns (405–500)</td><td>2.1 µs (1.7–11.8)</td><td>117 µs (67–447 µs)</td></tr>
     <tr><td class="n">ExtCounter0 (price levels touched)</td><td>0</td><td>5</td><td>7</td><td>10</td></tr>
     <tr><td class="n">ExtCounter1 (resting orders touched)</td><td>0</td><td>7</td><td>11</td><td>14</td></tr>
   </tbody>
 </table>
 </div>
 <p>
-  The tail is the machine's: p99.99 and max move several-fold between runs of identical input, and the 0.93 ms came from one run. One 30-second run at 50,000 orders a second gave p50 75 ns and p99 350 ns.
+  The tail is the machine's: p99.99 and max move several-fold between runs of identical input.
+</p>
+
+<h3>Higher rates</h3>
+<p>
+  The same test at higher rates, once with Core's defaults and once tuned, two runs each (three at 10,000 and at 500,000). The 500,000 runs last 4 seconds because the order-token table holds about 2 million orders' worth (see the limits). An egress event is "lost" when the gateway's per-event numbering shows that it never arrived; Core counts and warns about them but does not recover them. The engine columns are the median window's p50 and p99 of <code>EngineExecutionNs</code>, in ns.
+</p>
+<div class="tscroll">
+<table class="spec">
+  <thead><tr><th>Target orders/s</th><th>Defaults: reached</th><th>egress events lost</th><th>engine p50 / p99</th><th>Tuned: reached</th><th>egress events lost</th><th>engine p50 / p99</th></tr></thead>
+  <tbody>
+    <tr><td class="n">10,000</td><td>10,000</td><td>0</td><td>90 / 470</td><td>10,000</td><td>0</td><td>100 / 575</td></tr>
+    <tr><td class="n">50,000</td><td>49,998</td><td>0</td><td>80 / 390</td><td>49,998</td><td>0</td><td>75 / 365</td></tr>
+    <tr><td class="n">100,000</td><td>99,994</td><td>0</td><td>75–80 / 360–365</td><td>99,994</td><td>0</td><td>75 / 315</td></tr>
+    <tr><td class="n">200,000</td><td>199,976</td><td>0</td><td>75 / 340–350</td><td>199,977</td><td>0</td><td>75 / 320</td></tr>
+    <tr><td class="n">500,000</td><td>321,500–334,943</td><td>1,037–58,455</td><td>75–80 / 355–390</td><td>499,841–499,847</td><td>0</td><td>75 / 295</td></tr>
+  </tbody>
+</table>
+</div>
+<p>
+  In all 24 runs the leader never changed, no sequence gap needed repair and both replicas ended with identical books. With the defaults the gateway's console echo saturates its egress thread near 330,000 orders a second, which is where events start to be lost; tuned, the full 500,000 went through. Tuning costs a little at the low end: at 10,000 a second the receivers spin on cores the matching threads also use, so the median is 100 ns against 90 and the p99.99 is 9.5 to 14.9 µs against a median of 2.1.
+</p>
+<p>
+  <strong>Allocation.</strong> A preloaded <code>malloc</code> counter over 14 seconds at 50,000 orders a second (about 700,000 orders) found none in either replica or the performance service, and 404 in the gateway when tuned, all of them Core's arbiter growing its heartbeat history, a count that follows the number of replicas and not the orders. With the console echo on, the gateway also allocates once per egress batch, to copy the line buffer it prints (128,812 in the same window). The encoder holds each 30-byte frame inline, so it allocates nothing.
 </p>
 
 <h3>One level, in process</h3>
@@ -328,7 +351,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
 </ul>
 <p>
   <strong>By hand:</strong> <code>Tools/two_replica_smoke_test.sh</code> runs a gateway and two replicas and checks that the books converge, that exactly one replica publishes, that the epoch strictly increases after killing the leader,
-  and that the survivor's output still arrives. It is not part of CI. A run on Core v0.2.1 (2026-10-15):
+  and that the survivor's output still arrives. It is not part of CI. A run on Core v0.3.0 (2026-10-16):
 </p>
 <pre class="code">Book state converged -> best bid=40 best ask=60
 PASS: exactly one replica published egress (4 lines for 3 orders / 1 trade)
@@ -354,7 +377,7 @@ PASS: failover complete, survivor's egress reached the gateway (5 total egress l
 <div class="note limit"><b class="tag">EGRESS FORMAT</b>
   The public feed is a custom compact frame, not ITCH, and the <code>DELETED</code> event type is declared but never emitted (a full cancel reports <code>CANCELED</code> with nothing left).</div>
 <div class="note limit"><b class="tag">MEASUREMENTS</b>
-  Everything was measured on one machine over loopback under WSL2, without CPU pinning, so p99.99 and max include the host's scheduling noise. On Core v0.2.1 three 30-second runs at 10,000 orders a second had no sequence gap and no leader change. Three runs at 50,000 a second (one of 30 s, two of 70 s) had no gap and identical books on both replicas (<code>Tools/load_test.sh</code> compares a digest of each replica's whole book), and the leader changed 20 times in one of them and never in the other two. At 100,000 and 200,000 a second, and in a 4-second run at about 460,000, the books were still identical and no gap needed repair, but the leader changed 62, 106 and 78 times; the cause is not yet traced, so nothing is claimed as clean above 10,000. The engine is not the limit: on its own it sustains 4.8 to 19 million orders a second. Both 70-second runs (3.5 million orders each) filled the order-token table and kept their rate afterwards, rejecting the excess.</div>
+  Everything was measured on one machine over loopback under WSL2, without CPU pinning, so p99.99 and max include the host's scheduling noise. On Core v0.3.0, on an idle machine, the stack took every rate from 10,000 to 200,000 orders a second with no leader change, no sequence gap and no lost egress event, and both replicas ended with identical books (<code>Tools/load_test.sh</code> compares a digest of each replica's whole book and reports the gateway's egress counters). A target of 500,000 reached about 330,000 under Core's defaults, with egress events lost, and about 499,800 when tuned, with none lost, in 4-second runs. Nothing is claimed beyond that. The engine is not the limit: on its own it sustains 4.8 to 19 million orders a second. A 70-second run at 50,000 a second (3.5 million orders) filled the order-token table and kept its rate afterwards, rejecting the excess.</div>
 
 <!-- =====================================================================
      REPRODUCE
@@ -378,6 +401,7 @@ tail -f run/performance.log
 
 # the measurements above (needs -DBUILD_PERFORMANCE_SERVICE=ON)
 Tools/load_test.sh 10000 30 build
+Tools/load_test.sh 200000 10 build tuned
 build/Tools/OrderBookBench/OrderBookBench
 Tools/bench_counters.sh 12 build
 Tools/engine_throughput.sh 30 build</pre>

@@ -58,6 +58,14 @@ const projectsData = {
             technologies: "PYTHON PYGAME",
             htmlFile: "PokeWatt.html",
             module: "PokeWatt.js",
+            // Used by the page/module after they load; prefetched so they're cached by then.
+            assets: [
+                "projects/PokeWatt-mewtwo.json",
+                "projects/img/pokewatt-mountains.png",
+                "projects/img/pokewatt-city.png",
+                "projects/img/pokewatt-lake-dawn.png",
+                "projects/img/pokewatt-lake-dusk.png"
+            ],
             links: {
                 github: "https://github.com/infinite-simplex/PokeWatt"
             }
@@ -237,6 +245,37 @@ const ProjectDisplay = {
         return true;
     },
 
+    // Everything a project needs, started at most once: its markup, its module
+    // (which pulls in the shared runtime) and any extra assets. Promises are kept
+    // so a click during prefetch joins the request already in flight.
+    _loads: new Map(),
+
+    load(project) {
+        let entry = this._loads.get(project);
+        if (!entry) {
+            entry = {
+                html: fetch(`projects/${project.htmlFile}`).then(response => response.text()),
+                mod: project.module ? import(`./projects/${project.module}`) : Promise.resolve(null)
+            };
+            this._loads.set(project, entry);
+            // A failed load (e.g. offline) must not be remembered, so a later click retries.
+            const forget = () => { if (this._loads.get(project) === entry) this._loads.delete(project); };
+            entry.html.catch(forget);
+            entry.mod.catch(forget);
+
+            // Files only discovered once the project runs (images, data): warm the HTTP cache.
+            (project.assets || []).forEach(url => fetch(url, { priority: 'low' }).catch(() => {}));
+        }
+        return entry;
+    },
+
+    // Fetch every project while the boot screen plays so opening one is instant.
+    prefetch() {
+        projectsData.projects.forEach(project => {
+            if (project.type !== 'corrupted') this.load(project);
+        });
+    },
+
     unmountCurrent() {
         this._loadToken++;
         if (this._unmount) {
@@ -249,6 +288,7 @@ const ProjectDisplay = {
     },
 
     renderSpecificProject(project) {
+        loadExplainerStyles();
         this.unmountCurrent();
         this.setHash(this.slugOf(project));
         const token = this._loadToken;
@@ -280,21 +320,20 @@ const ProjectDisplay = {
         // Set the project panel's title
         Navigation.panels.project.querySelector('#project_title').textContent = project.title;
         
-        // Fetch project detail content
-        fetch(`projects/${project.htmlFile}`)
-            .then(response => response.text())
-            .then(html => {
+        // Usually already in flight (or done) from prefetch(); the markup and the
+        // module download concurrently rather than one after the other.
+        const { html, mod } = this.load(project);
+        html
+            .then(text => {
                 if (token !== this._loadToken) return; // user already moved on
-                projectDisplay.innerHTML = html;
+                projectDisplay.innerHTML = text;
 
                 // Animated projects: scripts in fetched HTML don't execute, so
-                // import the project's module and mount it into the fresh markup.
-                if (project.module) {
-                    return import(`./projects/${project.module}`).then(mod => {
-                        if (token !== this._loadToken) return;
-                        this._unmount = mod.mount(projectDisplay);
-                    });
-                }
+                // mount the project's module into the fresh markup.
+                return mod.then(m => {
+                    if (token !== this._loadToken) return;
+                    if (m) this._unmount = m.mount(projectDisplay);
+                });
             })
             .catch(error => {
                 console.error('Error loading project file:', error);
@@ -326,6 +365,9 @@ const LoadingScreen = {
      * Start the retro boot sequence
      */
     startSequence() {
+        // The boot screen runs for seconds with nothing else to download.
+        ProjectDisplay.prefetch();
+
         // Step 1: Backplane diagnostic
         setTimeout(() => {
             this.showBackplaneTest();
@@ -759,6 +801,19 @@ window.addEventListener('hashchange', () => {
     if (!document.querySelector('#mainContent.visible')) return; // still booting; completeLoading handles it
     ProjectDisplay.openFromHash(); // anything that isn't a project name is left alone
 });
+
+// Shared styles for the animated "explainer" project pages. Not in index.html so
+// they don't compete with the boot screen for bandwidth; fetched once the page has
+// loaded (the boot sequence takes seconds), or on demand if a project opens first.
+function loadExplainerStyles() {
+    if (document.getElementById('explainerStyles')) return;
+    const link = document.createElement('link');
+    link.id = 'explainerStyles';
+    link.rel = 'stylesheet';
+    link.href = 'projects/shared/explainer.css';
+    document.head.appendChild(link);
+}
+window.addEventListener('load', loadExplainerStyles);
 
 // Initialize loading screen sequence
 LoadingScreen.init();

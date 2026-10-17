@@ -1,0 +1,372 @@
+<!-- PokeWatt explainer — a fragment loaded into the project panel by script.js.
+     Behavior: PokeWatt.js (mount/unmount). Styles: shared/explainer.css, plus the few rules in the style block below. -->
+<style>
+@scope (.explainer) {
+  .btn.on { background: rgba(72, 208, 75, .38); color: #fff; box-shadow: inset 0 0 0 1px var(--NEON_GREEN); }
+  .fig-head label { display: inline-flex; align-items: center; gap: 8px; font-size: 1.15rem; }
+  .fig-head input[type=range] { accent-color: var(--NEON_GREEN); }
+  .fig-head input[type=number] {
+    width: 4.2em; background: var(--BG_COLOR); color: var(--NEON_GREEN); border: 2px solid var(--NEON_GREEN);
+    font-family: 'VT323', monospace; font-size: 1.2rem; padding: 0 4px;
+  }
+  .fig-body {
+    border: 2px solid var(--NEON_GREEN); box-shadow: 3px 3px var(--BOX_SHADOW); padding: 12px 14px;
+    background: linear-gradient(rgba(72,208,75,.05) 1px, transparent 1px) 0 0 / 100% 20px,
+                linear-gradient(90deg, rgba(72,208,75,.05) 1px, transparent 1px) 0 0 / 20px 100%, #010a12;
+  }
+  .fig-body input[type=range] { width: 100%; accent-color: var(--NEON_GREEN); }
+  .readout { font-family: 'VT323', monospace; font-size: 1.45rem; color: var(--NEON_GREEN); margin: 4px 0 2px; }
+  .readout b { color: var(--YELLOW); font-weight: normal; }
+  .quip { min-height: 3.1em; margin: 2px 0 8px; }
+
+  /* raw screenshots from the game */
+  .shots {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px;
+    border: 2px solid var(--NEON_GREEN); box-shadow: 3px 3px var(--BOX_SHADOW); padding: 12px;
+    background: #010a12;
+  }
+  .shots figure { margin: 0; }
+  .shots img {
+    display: block; width: 100%; aspect-ratio: 800 / 431; object-fit: cover;
+    image-rendering: pixelated; border: 1px solid rgba(72,208,75,.55);
+  }
+  .shots .cap { font-family: 'VT323', monospace; font-size: 1.2rem; color: var(--NEON_GREEN); margin-top: 4px; }
+  @media (max-width: 640px) { .shots { grid-template-columns: 1fr; } }
+
+  /* the odds bars */
+  .odds { display: grid; grid-template-columns: 7.2em 1fr 3.4em; gap: 4px 10px; align-items: center; margin: 8px 0; }
+  .odds .lbl { font-family: 'VT323', monospace; font-size: 1.25rem; color: var(--NEON_GREEN); }
+  .odds .lbl.r3 { color: var(--YELLOW); }
+  .odds .track { height: 16px; border: 1px solid rgba(72,208,75,.55); background: var(--BG_COLOR); }
+  .odds .fill { display: block; height: 100%; background: rgba(72,208,75,.7); transition: width .25s; }
+  .odds .fill.r3 { background: var(--YELLOW); }
+  .odds .pct { text-align: right; font-family: 'VT323', monospace; font-size: 1.25rem; }
+
+  /* strips under sliders */
+  .strip { display: flex; height: 22px; margin: 4px 0 2px; border: 1px solid rgba(72,208,75,.55); font-family: 'VT323', monospace; font-size: 1.05rem; }
+  .strip span { display: flex; align-items: center; justify-content: center; overflow: hidden; white-space: nowrap; color: var(--BG_COLOR); border-right: 1px solid var(--BG_COLOR); }
+  .strip span:last-child { border-right: none; }
+  .strip .z1 { background: #3d9bff; } .strip .z2 { background: #48d04b; } .strip .z3 { background: #d6e84a; }
+  .strip .z4 { background: #ffb23d; } .strip .z5 { background: #ff6a3d; } .strip .z6 { background: #ff3333; }
+  .pointer { position: relative; height: 12px; }
+  .pointer i { position: absolute; top: 0; width: 0; height: 0; margin-left: -6px; border: 6px solid transparent; border-bottom: 9px solid var(--YELLOW); border-top: none; }
+}
+</style>
+<div class="explainer">
+<header class="hero">
+  <div class="box">
+    <div class="kv"><span class="k">SUBTITLE:</span> <span class="v">A Pokémon game you power with your own legs: pedal harder, meet rarer Pokémon, and eventually pick a fight with Mewtwo</span></div>
+    <div class="kv"><span class="k">STATUS:</span> <span class="v warn">PLAYABLE — hydrate responsibly</span></div>
+    <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.10.16</span></div>
+    <div class="kv"><span class="k">STACK:</span> <span class="v">Python · pygame · Bluetooth LE power meter · one (1) bike trainer</span></div>
+    <div class="kv"><span class="k">SOURCE:</span>
+      <a href="https://github.com/infinite-simplex/PokeWatt" target="_blank">→ PokeWatt</a>
+    </div>
+    <div class="kv"><span class="k">JUMP TO:</span> <a href="#overview">overview</a> · <a href="#play">how it plays</a> · <a href="#boss">the boss</a> · <a href="#daynight">day &amp; night</a> · <a href="#hood">under the hood</a> · <a href="#numbers">numbers</a> · <a href="#limits">limits</a> · <a href="#run">run it</a></div>
+  </div>
+</header>
+
+<!-- =====================================================================
+     OVERVIEW
+     ===================================================================== -->
+<h2 id="overview">OVERVIEW</h2>
+
+<p>
+  PokeWatt is a side-scrolling Pokémon game with <strong>no controller</strong>. The controller is the power meter on my bike trainer, and the buttons are my legs.
+  Ride easy and the world ambles past, mostly populated by the Pokémon equivalent of pigeons. Ride hard and rarer Pokémon turn up to see what all the fuss is about.
+</p>
+<p>
+  It began as a way to make indoor riding less like staring at a wall, and it has since grown a boss fight, a sunrise, and a city that switches its lights on at night.
+  It is a portfolio project: a real game that really works, with some strong opinions about your FTP.
+</p>
+
+<figure class="fig" id="figFlow">
+  <div class="fig-head"><span class="id">FIG 1</span> From quads to screen <span class="spacer"></span></div>
+  <div class="fig-scroll">
+    <svg id="svgFlow" viewBox="0 0 980 290" role="img"
+         aria-label="Your legs turn the pedals, a Bluetooth power meter reports watts and cadence, a reader thread smooths them, the game loop turns them into Pokémon, and the screen shows the result. A recorded ride can stand in for the pedals."></svg>
+  </div>
+  <div class="cli-log" id="logFlow"></div>
+  <figcaption>
+    <strong>The short version:</strong> watts and cadence go in one end and Pokémon come out the other. The reader runs on its own thread, so a flaky Bluetooth moment never freezes the game.
+    A recorded ride (<code>ride.csv</code>) can stand in for the pedals, which is how I test without having to actually ride. Dot speed is illustrative.
+  </figcaption>
+</figure>
+
+<!-- =====================================================================
+     HOW IT PLAYS
+     ===================================================================== -->
+<h2 id="play">HOW IT PLAYS</h2>
+
+<p>Three numbers from the pedals run the whole show:</p>
+<ul>
+  <li><strong>Speed</strong> sets how fast the scenery scrolls and where you sit on screen (further left the faster you go). Stop pedaling and the world politely stops too, and nothing spawns.</li>
+  <li><strong>Cadence</strong> drives the pedaling animation and how often the game rolls the dice for a new Pokémon: about every 5 seconds when you're barely turning the cranks, down to about every second at 120 rpm. Each roll has a 45% chance of producing one.</li>
+  <li><strong>Power</strong> decides <em>which kind</em> of Pokémon you meet, measured against your FTP (the most power you can hold for about an hour, a number cyclists bring up at parties).</li>
+</ul>
+
+<figure class="fig" id="figEffort">
+  <div class="fig-head"><span class="id">FIG 2</span> How hard are you pedaling?
+    <span class="spacer"></span>
+    <label>FTP <input type="number" id="ftpInput" min="60" max="500" value="175" aria-label="Your FTP in watts"> W</label>
+  </div>
+  <div class="fig-body">
+    <label for="wattsRange" style="display:block">Drag to pedal:</label>
+    <input type="range" id="wattsRange" min="0" max="420" step="1" value="120">
+    <div class="strip" id="zoneStrip" aria-hidden="true"></div>
+    <div class="pointer" id="zonePointer" aria-hidden="true"><i></i></div>
+    <div class="readout" id="effortReadout"></div>
+    <p class="quip" id="effortQuip"></p>
+    <div class="odds">
+      <span class="lbl">COMMON</span><span class="track"><span class="fill" id="odds1"></span></span><span class="pct" id="pct1"></span>
+      <span class="lbl">UNCOMMON</span><span class="track"><span class="fill" id="odds2"></span></span><span class="pct" id="pct2"></span>
+      <span class="lbl r3">RARE</span><span class="track"><span class="fill r3" id="odds3"></span></span><span class="pct" id="pct3"></span>
+    </div>
+    <p class="readout" id="bossFlag" style="font-size:1.25rem"></p>
+  </div>
+  <figcaption>
+    <strong>The odds are the real ones</strong> from <code>get_rarity_probabilities()</code>. Set your own FTP and the zones slide to match, which is how everyone's easy day gets to feel equally hard.
+    "Rare" (rarity 3) is the legendary and mythical crowd: Articuno, Mewtwo, Mew and friends.
+  </figcaption>
+</figure>
+
+<h3>Okay, but which Pokémon?</h3>
+<p>
+  Power picks the tier; speed picks the Pokémon. Inside the tier, every candidate is ranked by how closely its base <strong>Speed stat</strong> matches how fast you're riding, and the winner is drawn with a bias toward the closest match.
+  So crawling along tends to attract Slowpoke, and a sprint brings out things that were built to get away from you. Pokémon are drawn at their real height, and the flying ones hover above the grass like they pay rent there.
+</p>
+<p>
+  Once a Pokémon turns up it drifts around you for 5–10 seconds and then leaves. If it was a poor match for how you're riding (a score below 0.45) for two seconds straight, it gets bored and leaves early.
+  Each one also has a <strong>1-in-100 chance of being shiny</strong>, which is exactly as exciting as it is on the handheld.
+</p>
+
+<div class="tscroll">
+<table class="spec" style="margin-top:14px">
+  <thead><tr><th>Zone</th><th>% of FTP</th><th>Watts at 175 W FTP</th><th>Common / uncommon / rare</th></tr></thead>
+  <tbody>
+    <tr><td class="n">Recovery</td><td>under 55%</td><td>under 96</td><td>95 / 5 / 0</td></tr>
+    <tr><td class="n">Endurance</td><td>55–74%</td><td>96–131</td><td>75 / 22 / 3</td></tr>
+    <tr><td class="n">Tempo</td><td>75–89%</td><td>131–157</td><td>40 / 40 / 20</td></tr>
+    <tr><td class="n">Threshold</td><td>90–105%</td><td>157–185</td><td>30 / 30 / 40</td></tr>
+    <tr><td class="n">VO2 / anaerobic</td><td>106–149%</td><td>185–262</td><td>10 / 40 / 50</td></tr>
+    <tr><td class="n">Neuromuscular</td><td>150% and up</td><td>262+</td><td>0 / 10 / 90</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- =====================================================================
+     BOSS
+     ===================================================================== -->
+<h2 id="boss">THE BOSS</h2>
+
+<p>
+  Every minute a boss walks into the scene. Right now that boss is <strong>Mewtwo</strong>, who is the only boss, and who has made peace with that. It strolls in, falls asleep (rude), wakes up, and waits to see what you've got.
+  Every second you hold at least <strong>150% of your FTP</strong> (262 W for a 175 W FTP) costs it one of its ten health points. Drain them all and it faints, wanders off, and the next boss shows up a minute later.
+  While it's out, wild Pokémon flee to the right in a panic and no new ones spawn, because it's a one-on-one situation now.
+</p>
+
+<figure class="fig" id="figBoss">
+  <div class="fig-head"><span class="id">FIG 3</span> One boss, start to finish <span class="spacer"></span>
+    <button class="btn on" id="bossPedal" type="button">[ PEDALING HARD ]</button>
+  </div>
+  <div class="fig-scroll">
+    <svg id="svgBoss" viewBox="0 0 980 320" role="img"
+         aria-label="The boss's states in order: inactive, entering, sleeping, waking, idle, then hurt or fighting on each hit, and finally fainting and exiting."></svg>
+  </div>
+  <div class="cli-log" id="logBoss"></div>
+  <figcaption>
+    <strong>Toggle the button</strong> to ease off and watch the boss do absolutely nothing about it. Each hit shows either the hurt animation or (one time in five) a shoot animation,
+    and the shoot is purely for show: it never hits back, which is the kind of boss I'm comfortable with. Timing here is illustrative.
+  </figcaption>
+</figure>
+
+<div class="note"><b class="tag">FAIR WARNING</b> Hits count <em>total</em> seconds above the line, not consecutive ones, and there is no penalty for dipping below it. A boss that doesn't punish you for resting is generous. A boss that doesn't punish you for anything is a work in progress.</div>
+
+<!-- =====================================================================
+     DAY AND NIGHT
+     ===================================================================== -->
+<h2 id="daynight">DAY AND NIGHT</h2>
+
+<p>
+  The scenery follows <strong>your computer's real clock</strong>. Ride at noon and it's a sunny day with mountains and pine trees. Ride at 3 a.m. and there's a city across the water with its lights on, and you are the only person awake in it.
+  The sky is one picture whose palette slides through day, sunset and night, the way the original handhelds did it, so there are no drawings fading into other drawings. What stands in front of the sky changes with the hour:
+</p>
+
+<div class="tscroll">
+<table class="spec">
+  <thead><tr><th>Hours</th><th>Scene</th><th>Sky</th></tr></thead>
+  <tbody>
+    <tr><td class="n">05:30–07:30</td><td>Lake</td><td>Night gives way to sunrise, then day</td></tr>
+    <tr><td class="n">07:30–17:30</td><td>Mountains and forest</td><td>Day</td></tr>
+    <tr><td class="n">17:30–19:30</td><td>Lake</td><td>Day turns to sunset</td></tr>
+    <tr><td class="n">19:30–05:30</td><td>City across the lake</td><td>Sunset gives way to night</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>Whole things only</h3>
+<p>
+  The first version simply faded one scene into the next, which is how you end up with half-transparent buildings floating over a lake. The fix was a rule: <strong>nothing is ever drawn in part</strong>.
+  Buildings and trees are "trains" of whole objects. When a scene starts, the first building scrolls in from the left edge, the next one follows, and so on. When it ends, whatever is on screen carries on off to the right and the last one leaves, whole, behind it.
+  Even if you've stopped pedaling the scenery keeps up a minimum pace for the change, so you never sit there waiting for a tree.
+</p>
+<h3>Mountains that rise out of the ground</h3>
+<p>
+  Mountains can't just pop in, so they get ramps. Each end of a range has a hill that sinks down behind the grass, built from the mountain's own ridge, so its peaks and bumps carry straight on into the ramp. It joins the loop with no visible seam.
+  They also drift by at about an eighth of the speed of the trees in front of them, because they are very big and very far away.
+  The mountains arrive before the trees, since the trees are nearer and quicker and would otherwise run ahead and stand on the lake.
+</p>
+
+<figure class="fig" id="figShots">
+  <div class="fig-head"><span class="id">FIG 4</span> Straight from the game <span class="spacer"></span></div>
+  <div class="shots">
+    <figure>
+      <img src="projects/img/pokewatt-mountains.png" alt="Daytime: a rider on a bike in front of a ridge of pale mountains under a blue sky with white clouds." loading="lazy">
+      <div class="cap">&gt; DAY: MOUNTAINS</div>
+    </figure>
+    <figure>
+      <img src="projects/img/pokewatt-city.png" alt="Night: a rider on a bike in front of a skyline of lit-up buildings across a lake, under a dark blue sky with clouds." loading="lazy">
+      <div class="cap">&gt; NIGHT: CITY</div>
+    </figure>
+    <figure>
+      <img src="projects/img/pokewatt-lake-dawn.png" alt="Early morning: a rider on a bike in front of a mauve lake under a pale, sandy sky with cream-coloured clouds." loading="lazy">
+      <div class="cap">&gt; DAWN: LAKE</div>
+    </figure>
+    <figure>
+      <img src="projects/img/pokewatt-lake-dusk.png" alt="Sunset: a rider on a bike in front of a salmon-pink lake under an orange and yellow sky." loading="lazy">
+      <div class="cap">&gt; DUSK: LAKE</div>
+    </figure>
+  </div>
+  <figcaption>
+    <strong>Real screenshots</strong>, no filters. The sky in all four is the same picture; only its palette changes, and the scene in front of it swaps.
+  </figcaption>
+</figure>
+
+<!-- =====================================================================
+     UNDER THE HOOD
+     ===================================================================== -->
+<h2 id="hood">UNDER THE HOOD</h2>
+<p>Not a lot of machinery, but each piece had a reason. Every card lists what it buys and what it gives up.</p>
+
+<div class="cards">
+
+  <div class="card">
+    <h4>A fixed 800×480 canvas</h4>
+    <p>Everything is drawn onto one small surface, then scaled to fit whatever window you have.</p>
+    <p class="buys"><span class="lbl">BUYS</span> Every position and sprite size is tuned once and stays right at any window size.</p>
+    <p class="costs"><span class="lbl">COSTS</span> Black bars when the window is the wrong shape.</p>
+    <p class="where">main.py · scale_and_blit_game_surface</p>
+  </div>
+
+  <div class="card">
+    <h4>Bluetooth on its own thread</h4>
+    <p>The power meter is read on a background thread, which hands the game a smoothed snapshot.</p>
+    <p class="buys"><span class="lbl">BUYS</span> The game never waits on Bluetooth, and watts and cadence are averaged over three seconds so a single twitchy reading doesn't spawn Mew.</p>
+    <p class="costs"><span class="lbl">COSTS</span> The numbers lag you by a moment. Your legs will know before the screen does.</p>
+    <p class="where">powermeter.py · PowerMeterReader</p>
+  </div>
+
+  <div class="card">
+    <h4>Speed worked out from watts</h4>
+    <p>Speed isn't measured. It's estimated from power, using the rule that power goes up with the cube of speed.</p>
+    <p class="buys"><span class="lbl">BUYS</span> No speed sensor needed. One power meter is the whole setup.</p>
+    <p class="costs"><span class="lbl">COSTS</span> It assumes a flat road with no wind and a typical rider. Hills and headwinds are, as far as the game knows, a rumor.</p>
+    <p class="where">powermeter.py · estimate_speed_mph</p>
+  </div>
+
+  <div class="card">
+    <h4>A replay mode</h4>
+    <p>A recorded ride can stand in for the live meter, second by second.</p>
+    <p class="buys"><span class="lbl">BUYS</span> I can develop at 11 p.m. in socks without having to earn the numbers.</p>
+    <p class="costs"><span class="lbl">COSTS</span> Right now it's chosen by editing a line in the code, and the replay is switched on.</p>
+    <p class="where">powermeterReplay.py · ride.csv</p>
+  </div>
+
+  <div class="card">
+    <h4>Palettes instead of repaints</h4>
+    <p>The sky art uses a small color palette, and sunrise and sunset are just that palette being blended every frame.</p>
+    <p class="buys"><span class="lbl">BUYS</span> Smooth sunsets from a handful of colors, and the exact look of the original art.</p>
+    <p class="costs"><span class="lbl">COSTS</span> The art has to be that kind of indexed picture. Ground layers don't have night palettes, so they're simply tinted instead.</p>
+    <p class="where">daynight.py · Sky, blend3</p>
+  </div>
+
+  <div class="card">
+    <h4>Scenery as trains of whole objects</h4>
+    <p>Buildings, trees and mountain ranges each know exactly where one object ends and the next begins, and only ever cut between them.</p>
+    <p class="buys"><span class="lbl">BUYS</span> No half buildings, no trees standing on the lake, and transitions that look like riding somewhere.</p>
+    <p class="costs"><span class="lbl">COSTS</span> A scene change takes several seconds to roll through, and the parts have to be told which order to arrive in.</p>
+    <p class="where">daynight.py · Train, Range</p>
+  </div>
+
+</div>
+
+<!-- =====================================================================
+     NUMBERS
+     ===================================================================== -->
+<h2 id="numbers">BY THE NUMBERS</h2>
+
+<div class="tscroll">
+<table class="spec">
+  <thead><tr><th>Thing</th><th>Value</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr><td class="n">Pokémon in the game</td><td>1,025</td><td>692 common, 209 uncommon, 124 rare, 82 of them flyers</td></tr>
+    <tr><td class="n">With a walking sprite</td><td>966</td><td>The other 59 are shy and never show up</td></tr>
+    <tr><td class="n">Shiny odds</td><td>1 in 100</td><td>Per Pokémon, so you'll see a few a ride</td></tr>
+    <tr><td class="n">Frame rate</td><td>48 per second</td><td>A frame of scenery takes about 5–9 ms to draw on my machine</td></tr>
+    <tr><td class="n">Screen</td><td>800×480</td><td>Scaled to fit your window</td></tr>
+    <tr><td class="n">Boss</td><td>Every minute</td><td>10 seconds above 150% FTP to win (262 W at 175 W)</td></tr>
+    <tr><td class="n">A full day, in test mode</td><td>48 seconds</td><td>Press <code>T</code> and watch the sun get its life together</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>How I checked it</h3>
+<p>
+  There is no formal test suite, because this is a game I ride. Instead I wrote throwaway scripts that draw the scene headlessly at any hour, replay a whole day in under a minute, and flip scenes at random moments mid-transition to see whether anything breaks.
+  Nothing did, in the end, after several things did. The scripts live outside the repository, so you'll have to take my word for it, or ride it yourself and tell me.
+</p>
+
+<!-- =====================================================================
+     LIMITS
+     ===================================================================== -->
+<h2 id="limits">KNOWN LIMITS</h2>
+
+<div class="note limit"><b class="tag">SPEED IS A GUESS</b> It's estimated from watts on a flat, windless road. Real speed on real roads would be better, and would need a speed sensor.</div>
+<div class="note limit"><b class="tag">ONE BOSS</b> It's always Mewtwo. The boss list exists as a plan, not a feature, and the shoot animation is only decoration.</div>
+<div class="note limit"><b class="tag">SETTINGS LIVE IN THE CODE</b> The meter's Bluetooth address, your FTP and the choice between live and replay data are edited in <code>main.py</code>. A config file is on the list.</div>
+<div class="note limit"><b class="tag">ONE SETUP</b> Developed on Windows 11 with Favero Assioma pedals. Other Bluetooth power meters that speak the standard cycling power service should work, but I haven't tried any.</div>
+<div class="note limit"><b class="tag">SHY POKÉMON</b> 59 of the 1,025 have no walking sprite yet, so the game quietly skips them.</div>
+<div class="note limit"><b class="tag">WEATHER</b> There isn't any. It's always either clear or the time of day.</div>
+
+<!-- =====================================================================
+     RUN IT
+     ===================================================================== -->
+<h2 id="run">RUN IT</h2>
+<p>You need Python 3.9 or newer.</p>
+<pre class="code">pip install -r requirements.txt
+python main.py</pre>
+<p>
+  Out of the box it replays a recorded ride, so you can watch the whole thing without any hardware. To ride for real, point it at your meter (<code>python scan_devices.py</code> finds the address) and set your FTP in <code>main.py</code>.
+  The keyboard is for testing, and for cheating:
+</p>
+<div class="tscroll">
+<table class="spec">
+  <thead><tr><th>Key</th><th>What it does</th></tr></thead>
+  <tbody>
+    <tr><td class="n">Up / Down</td><td>Speed ±5 mph</td></tr>
+    <tr><td class="n">Right / Left</td><td>Power ±40 W</td></tr>
+    <tr><td class="n">C / M</td><td>Cadence ±5 rpm</td></tr>
+    <tr><td class="n">F3</td><td>Show the debug overlay (clock, scene, speed, odds and more)</td></tr>
+    <tr><td class="n">[ and ]</td><td>Move the scenery clock back or forward an hour</td></tr>
+    <tr><td class="n">T</td><td>Time-lapse: a whole day in about 48 seconds</td></tr>
+    <tr><td class="n">R</td><td>Back to the real clock</td></tr>
+  </tbody>
+</table>
+</div>
+
+<footer>
+  <strong>Sprite credit:</strong> every Pokémon you see walking, sleeping or fainting is the work of the artists behind <a href="https://sprites.pmdcollab.org/" target="_blank">SpriteCollab (sprites.pmdcollab.org)</a>. I didn't draw any of them. Their work is the fuel for this project, and it wouldn't exist without them.
+  PokeWatt is an unofficial fan project and isn't affiliated with or endorsed by Nintendo, Game Freak or The Pokémon Company. Pokémon belongs to them.
+  This page is the whole pitch: it's a game, it's silly, and it is powered by someone being slightly out of breath.
+</footer>
+</div>

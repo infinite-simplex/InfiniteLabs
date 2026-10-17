@@ -53,13 +53,13 @@ const projectsData = {
         },
         {
             segmentId: "SEGMENT 40960",
-            title: "PROJECT WATTAGE",
+            title: "POKE WATT",
             status: "NOMINAL",
-            technologies: "PYTHON",
-            htmlFile: "project_wattage.html",
+            technologies: "PYTHON PYGAME",
+            htmlFile: "PokeWatt.html",
+            module: "PokeWatt.js",
             links: {
-                github: "https://github.com/yourusername/project-two",
-                youtube: "https://youtube.com/channel/your-channel"
+                github: "https://github.com/infinite-simplex/PokeWatt"
             }
         },
         {

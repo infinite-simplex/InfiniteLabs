@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="styles.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <div class="loading-screen" id="loadingScreen">
+    <div class="loading-content">
+      <div id="biosHeader">
+        INFINITE-SYS V4.02 ARCHITECTURE BIOS (C) 2026 INFINITE LABS<br>
+        ALL RIGHTS RESERVED // SYSTEM REVISION 0x8F2A<br>
+        --------------------------------------------------
+      </div>
+      <div id="backplane" class="hidden">Testing Backplane: <span class="success hidden">Passed</span></div>
+      <div id="nodes" class="hidden">Coordinating Nodes: <span id="nodeCount">0</span> <span class="success hidden">OK</span></div>
+      <div id="driverLog" class="hidden">
+        <div>> LOADING DRIVER [0x01]: SYSTEM_CLOCK.SYS ..... <span class="success">OK</span></div>
+        <div>> LOADING DRIVER [0x02]: MEM_BUS_ALIGN.SYS .... <span class="success">OK</span></div>
+        <div id="failedDriver" class="hidden">> LOADING DRIVER [0x03]: SEG_RECOVER.SYS ...... <span class="error-text">FAIL</span></div>
+      </div>
+      <div id="error" class="error-message hidden">
+        ERROR: CORRUPTED SEGMENTS DETECTED, INITIALIZING DEBUGGER
+      </div>
+    </div>
+  </div>
+
+  <div id="mainContent">
+    <div class="container">
+      <button class="hamburger-btn" id="hamburgerBtn" title="Menu">&#9776;</button>
+      <div class="left-panel-overlay" id="leftPanelOverlay"></div>
+      
+      <div class="left-panel" id="leftPanel">
+        <div class="header-box">
+          <div class="header-title">- PORTFOLIO INTERFACE -</div> 
+          <p class="project_statistics">CYCLES / PROJECTS / COMMITS</p>
+        </div>
+        <div class="cli-interface" id="cliInterface">
+            <div class="cli-output" id="cliOutput">
+                <div class="cli-line system-msg">INFINITE-SYS CLI v4.02</div>
+                <div class="cli-line system-msg">Type <span class="cmd-highlight">'help'</span> for available commands.</div>
+            </div>
+            <div class="cli-input-line">
+                <span class="cli-prompt">&gt;</span>
+                <input type="text" id="cliInput" autocomplete="off" spellcheck="false" autofocus />
+            </div>
+        </div>
+      </div>
+
+      <div class="right-panel" id="rightPanel">
+        <!-- Main Projects Grid Panel -->
+        <div id="projectsPanel" class="content-panel">
+          <h2 class="glossary-font-secondary">/projects</h2>
+          <div class="projects-grid"></div>
+        </div>
+
+        <!-- Individual Project View Panel -->
+        <div id="projectPanel" class="content-panel">
+          <h3 class="glossary-font-secondary" id="project_path">/projects</h3>
+          <h2 class="glossary-font-primary" id="project_title"></h2>
+          <div id="project_display"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

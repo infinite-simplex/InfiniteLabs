@@ -7,6 +7,7 @@ const R = createRuntime(root);
 const { $, el, Scene, sleep, travel, trace, node, label, frameBox, REDUCED } = R;
 const { GREEN, BLUE, YEL, GRAYC, REDC } = R.colors;
 const timers = [];
+const cleanups = [];
 
 /* =====================================================================
    Shared: the power zones (the real odds from get_rarity_probabilities)
@@ -43,10 +44,10 @@ const zoneIndex = (watts, ftp) => ZONES.indexOf(zoneFor(watts, ftp));
     node(nodeLayer, { x: X[0], y: Y, w: W, h: H, title: 'YOUR LEGS', sub: ['watts · cadence', '(the controller)'] }),
     node(nodeLayer, { x: X[1], y: Y, w: W, h: H, title: 'PEDALS', sub: ['Bluetooth LE', 'power meter'] }),
     node(nodeLayer, { x: X[2], y: Y, w: W, h: H, title: 'READER', sub: ['its own thread', 'smooths the wobble'] }),
-    node(nodeLayer, { x: X[3], y: Y, w: W, h: H, title: 'GAME', sub: ['spawn · scroll · boss', '48 frames a second'] }),
-    node(nodeLayer, { x: X[4], y: Y, w: W, h: H, title: 'SCREEN', sub: ['800×480', 'Pokémon happen here'] }),
+    node(nodeLayer, { x: X[3], y: Y, w: W, h: H, title: 'GAME', sub: ['spawns · bosses', '48 frames a second'] }),
+    node(nodeLayer, { x: X[4], y: Y, w: W, h: H, title: 'SCREEN', sub: ['800×480', 'Pokémon appear'] }),
   ];
-  const replay = node(nodeLayer, { x: X[2], y: 190, w: W, h: H, cls: 'blue', title: 'ride.csv', sub: ['a recorded ride', 'stands in for the pedals'] });
+  const replay = node(nodeLayer, { x: X[2], y: 190, w: W, h: H, cls: 'blue', title: 'ride.csv', sub: ['a recorded ride', 'replaces pedals'] });
 
   const links = [0, 1, 2, 3].map(i => trace(traceLayer, [[X[i] + W, Y + H / 2], [X[i + 1], Y + H / 2]], '', { r: 4 }));
   trace(traceLayer, [[X[2] + W, 226], [X[3] + W / 2, 226], [X[3] + W / 2, Y + H]], 'udp', { r: 8 });
@@ -129,93 +130,32 @@ const zoneIndex = (watts, ftp) => ZONES.indexOf(zoneFor(watts, ftp));
 })();
 
 /* =====================================================================
-   FIG 3 — one boss, start to finish
+   TARGET — a spinning ASCII Mewtwo (frames are pre-rendered from a 3D model)
    ===================================================================== */
-(function figBoss() {
-  const svg = $('svgBoss');
-  const scene = new Scene(svg, { paused: REDUCED });
-  const traceLayer = el('g', {}, svg), nodeLayer = el('g', {}, svg);
-  const nd = {};
-  const add = (id, x, y, w, sub, cls = '') => {
-    nd[id] = node(nodeLayer, { x, y, w, h: 64, title: id, sub: [sub], cls });
-  };
-  add('INACTIVE', 10, 250, 200, 'a minute goes by');
-  add('ENTERING', 10, 40, 200, 'walks in from the left');
-  add('SLEEPING', 260, 40, 200, 'zzz (rude)');
-  add('WAKING', 510, 40, 200, 'stretches');
-  add('IDLE', 760, 40, 200, 'waits for your watts');
-  add('HURT', 620, 150, 170, 'ow (4 times in 5)', 'warn');
-  add('FIGHTING', 810, 150, 160, 'flexes (1 in 5)', 'blue');
-  add('FAINTING', 510, 250, 200, 'health is zero');
-  add('EXITING', 260, 250, 200, 'wanders off');
+(function figMewtwo() {
+  const box = $('mewtwoBox'), pre = $('mewtwoArt');
+  if (!box || !pre) return;
+  const COLS = 66, STEP_MS = 100;
+  let frames = null, pos = 0, onScreen = true, drag = null;
 
-  const T = (pts, cls = '') => trace(traceLayer, pts, cls, { r: 6 });
-  T([[210, 72], [260, 72]]); T([[460, 72], [510, 72]]); T([[710, 72], [760, 72]]);
-  T([[800, 104], [800, 127], [705, 127], [705, 150]], 'hb');
-  T([[900, 104], [900, 150]], 'udp');
-  T([[780, 104], [780, 218], [610, 218], [610, 250]], 'dim');
-  T([[510, 282], [460, 282]]); T([[260, 282], [210, 282]]); T([[110, 250], [110, 104]], 'dim');
-  label(svg, 668, 120, 'hit', { cls: 'hb', anchor: 'middle' });
-  label(svg, 920, 130, 'hit', { cls: 'udp' });
-  label(svg, 700, 236, 'health 0', { cls: 'hb', anchor: 'middle' });
-  label(svg, 118, 190, 'next boss', { cls: '' });
+  const show = () => { if (frames) pre.textContent = frames[((Math.round(pos) % frames.length) + frames.length) % frames.length]; };
+  // Courier is 0.6em wide, so size the type to make the 66 columns fill the box.
+  const fit = () => { pre.style.fontSize = Math.max(5, Math.min(14, (box.clientWidth - 28) / (COLS * 0.6))) + 'px'; };
+  fit();
+  const ro = new ResizeObserver(fit); ro.observe(box); cleanups.push(() => ro.disconnect());
+  const io = new IntersectionObserver(([e]) => { onScreen = e.isIntersecting; }); io.observe(box); cleanups.push(() => io.disconnect());
 
-  // the boss's ten health points
-  const pips = [];
-  for (let i = 0; i < 10; i++) {
-    pips.push(el('rect', { x: 760 + i * 20, y: 10, width: 16, height: 12, fill: GREEN, stroke: GREEN, 'stroke-width': 1 }, svg));
-  }
-  const hpLabel = el('text', { x: 745, y: 21, 'text-anchor': 'end', fill: GRAYC, 'font-size': 12 }, svg);
-  hpLabel.textContent = 'BOSS HP';
-  const drawHp = hp => pips.forEach((p, i) => { p.setAttribute('fill', i < hp ? GREEN : 'none'); });
+  fetch(new URL('./PokeWatt-mewtwo.json', import.meta.url)).then(r => r.json()).then(f => {
+    frames = f; show();
+    if (!REDUCED) timers.push(setInterval(() => { if (onScreen && !drag && !document.hidden) { pos += 1; show(); } }, STEP_MS));
+  }).catch(() => { pre.textContent = '[ Mewtwo declined to be rendered ]'; });
 
-  const logEl = $('logBoss');
-  const lines = [];
-  const say = (msg, cls = '') => {
-    lines.push(`<div class="${cls}">${msg}</div>`);
-    if (lines.length > 6) lines.shift();
-    logEl.innerHTML = lines.join('');
-  };
-  const setState = (id, msg, cls) => {
-    Object.values(nd).forEach(g => g.classList.remove('lit', 'leader'));
-    nd[id].classList.add('lit', 'leader');
-    if (msg) say(`> ${id.toLowerCase()}: ${msg}`, cls);
-  };
-
-  let hard = true;
-  const btn = $('bossPedal');
-  btn.addEventListener('click', () => {
-    hard = !hard;
-    btn.classList.toggle('on', hard);
-    btn.textContent = hard ? '[ PEDALING HARD ]' : '[ EASING OFF ]';
-    say(hard ? '> you dig in. 262 W and climbing.' : '> you ease off to sip some water.', hard ? 'hi' : 'dim');
-  });
-
-  (async () => {
-    for (;;) {
-      let hp = 10; drawHp(hp);
-      setState('INACTIVE', 'the wild Pokémon have gone quiet', 'dim'); await sleep(scene, 1500);
-      setState('ENTERING', 'Mewtwo walks in. Everyone else leaves.', 'hi'); await sleep(scene, 2100);
-      setState('SLEEPING', 'it falls asleep. In front of you.'); await sleep(scene, 1200);
-      setState('WAKING', 'it wakes up, and it looks ready'); await sleep(scene, 1400);
-      setState('IDLE', 'waiting to see your watts', 'hi');
-      while (hp > 0) {
-        await sleep(scene, 1000);
-        if (!hard) { say('> not enough power. Mewtwo yawns.', 'dim'); continue; }
-        hp--; drawHp(hp);
-        if (hp === 0) break;
-        if (Math.random() < 0.2) {
-          setState('FIGHTING', `flexes dramatically (${hp} HP left). It does nothing.`); await sleep(scene, 900);
-        } else {
-          setState('HURT', `ow (${hp} HP left)`, 'err'); await sleep(scene, 650);
-        }
-        setState('IDLE');
-      }
-      setState('FAINTING', 'it faints. Dramatically.', 'hi'); await sleep(scene, 1600);
-      setState('EXITING', 'it wanders off to think about what happened'); await sleep(scene, 1800);
-    }
-  })();
+  // drag to turn it by hand
+  box.addEventListener('pointerdown', e => { drag = { x: e.clientX, pos }; box.setPointerCapture(e.pointerId); });
+  box.addEventListener('pointermove', e => { if (drag) { pos = drag.pos - (e.clientX - drag.x) / 8; show(); } });
+  const release = () => { drag = null; };
+  box.addEventListener('pointerup', release); box.addEventListener('pointercancel', release);
 })();
 
-return () => { timers.forEach(clearInterval); R.unmount(); };
+return () => { timers.forEach(clearInterval); cleanups.forEach(fn => fn()); R.unmount(); };
 }

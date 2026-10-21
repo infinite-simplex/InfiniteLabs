@@ -162,6 +162,14 @@
     gap: 10px;
   }
 
+  /* Narrow screens: fixed 300px cards leave a gap on the right (or overflow below
+     ~340px), so let the columns share the width instead. */
+  @media (max-width: 900px) {
+    .projects-grid {
+      grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
+    }
+  }
+
   .project-segment {
     border: 1px solid var(--NEON_GREEN);
     padding: 15px;
@@ -443,7 +451,8 @@
       height: 100vh;
       box-shadow: none;
       z-index: 2000;
-      padding: 20px 20px 20px 20px;
+      /* Extra top padding keeps the fixed hamburger/close button off the header box. */
+      padding: 68px 20px 20px 20px;
     }
 
     .left-panel.mobile-visible {
@@ -528,7 +537,8 @@
 }
 
 .cli-line {
-  word-break: break-all;
+  /* Wrap at spaces first; only split a word when it can't fit on a line by itself. */
+  overflow-wrap: anywhere;
   font-size: 1.1rem;
   line-height: 1.2;
 }

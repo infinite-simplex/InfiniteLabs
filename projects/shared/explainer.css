@@ -215,7 +215,7 @@
     /* for tables whose first column holds long names (e.g. template signatures) */
     table.spec.wrapfirst td.n { white-space: normal; overflow-wrap: break-word; min-width: 11em; }
 
-    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 14px; margin-top: 12px; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(310px, 100%), 1fr)); gap: 14px; margin-top: 12px; }
     .card {
       border: 1px solid var(--NEON_GREEN); outline: 1px solid var(--NEON_GREEN); outline-offset: -4px;
       box-shadow: 3px 3px var(--BOX_SHADOW); padding: 14px 14px 12px; background: var(--BG_COLOR);

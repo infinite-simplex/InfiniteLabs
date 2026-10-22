@@ -17,10 +17,34 @@
     /* Height of the terminal as a share of the visible screen. It shrinks on its
        own if the window is too short to fit it under the header box. */
     --CLI_HEIGHT: 90vh;
+
+    /* The site uses two typefaces: VT323 for display text and controls, Courier New for body
+       text and code. Always use these instead of writing a font stack by hand. */
+    --FONT_DISPLAY: 'VT323', monospace;
+    --FONT_BODY: 'Courier New', monospace;
+
+    /* Spacing scale for padding. Pick the nearest step rather than a one-off pixel value. */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+    --space-7: 64px;
+  }
+
+  /* Buttons and code blocks don't inherit the page font by default (system sans-serif / generic monospace). */
+  button {
+    font-family: inherit;
+  }
+
+  pre,
+  code {
+    font-family: var(--FONT_BODY);
   }
 
   .glossary-font-secondary {
-    font-family: "VT323", monospace;
+    font-family: var(--FONT_DISPLAY);
     font-weight: 400;
     font-style: normal;
     color: var(--BOX_SHADOW);
@@ -43,7 +67,7 @@
     position: fixed;
     width: 100%;
     height: 100%;
-    padding: 30px;
+    padding: var(--space-6);
     background: var(--BG_COLOR);
     color: var(--GRAY);
     display: flex;
@@ -57,7 +81,7 @@
     padding: 0;
     background-color: var(--BG_COLOR);
     color: var(--GRAY);
-    font-family: 'Courier New', monospace;
+    font-family: var(--FONT_BODY);
     line-height: 1.2;
     /* The page itself never scrolls: the left panel stays put and the right
        panel scrolls on its own (see .right-panel). */
@@ -101,9 +125,9 @@
 
 .left-panel {
     box-sizing: border-box;
-    padding-left: 10px;
-    padding-bottom: 10px;
-    padding-top: 10px;
+    padding-left: var(--space-3);
+    padding-bottom: var(--space-3);
+    padding-top: var(--space-3);
     padding-right: 0;
 
     height: 100%;
@@ -121,7 +145,7 @@
 
   .header-box {
     border: 2px solid var(--NEON_GREEN);
-    padding: 10px;
+    padding: var(--space-3);
     background-color: var(--BG_COLOR);
     margin-bottom: 10px;
   }
@@ -129,12 +153,12 @@
   .header-title {
     text-align: center;
     border-bottom: 1px solid var(--NEON_GREEN);
-    padding-bottom: 10px;
+    padding-bottom: var(--space-3);
   }
 
   .project_statistics {
     text-align: center;
-    padding-top: 10px;
+    padding-top: var(--space-3);
     margin: 0px;
   }
 
@@ -149,7 +173,7 @@
   .stats-box {
     background-color: var(--BG_COLOR);
     border: 2px solid var(--NEON_GREEN);
-    padding: 10px;
+    padding: var(--space-3);
     height: 100px;
     display: flex;
     flex-direction: column;
@@ -172,8 +196,8 @@
 
   .project-segment {
     border: 1px solid var(--NEON_GREEN);
-    padding: 15px;
-    padding-top: 25px;
+    padding: var(--space-4);
+    padding-top: var(--space-5);
     background-color: var(--BG_COLOR);
     text-align: center;
     position: relative;
@@ -210,14 +234,14 @@
   }
 
   .project-display {
-    font-family: 'Courier New', monospace;
+    font-family: var(--FONT_BODY);
     font-size: 1.1em;
     line-height: 1.6;
   }
 
   .menu-item {
     border: 2px solid var(--NEON_GREEN);
-    padding: 10px;
+    padding: var(--space-3);
     margin-bottom: 5px;
     background-color: var(--BG_COLOR);
     cursor: pointer;
@@ -249,7 +273,7 @@
     font-size: 0.7em;
     color: var(--GRAY);
     text-align: center;
-    padding: 5px;
+    padding: var(--space-1);
     border: 1px solid #333;
     margin-top: 5px;
     word-wrap: break-word;
@@ -301,7 +325,7 @@
 
   .change {
     display: inline-block;
-    padding: 4px 8px;
+    padding: var(--space-1) var(--space-2);
     border-radius: 4px;
     font-size: 14px;
     right: 5px;
@@ -345,7 +369,7 @@
   }
 
   .debug-btn {
-    padding: 10px 20px;
+    padding: var(--space-3) var(--space-5);
     background-color: var(--RED);
     color: var(--GRAY);
     border: none;
@@ -365,7 +389,7 @@
     transform: translate(-50%, -50%);
     background-color: var(--BG_COLOR);
     border: 2px solid var(--RED);
-    padding: 20px;
+    padding: var(--space-5);
     color: var(--GRAY);
     text-align: center;
     box-shadow: 3px 3px rgba(255, 0, 0, 0.7);
@@ -375,7 +399,7 @@
     background-color: var(--RED);
     color: var(--GRAY);
     border: none;
-    padding: 10px;
+    padding: var(--space-3);
     cursor: pointer;
   }
 
@@ -389,7 +413,7 @@
     gap: 5px;
     background: var(--BG_COLOR);
     border: 2px solid var(--NEON_GREEN);
-    padding: 10px;
+    padding: var(--space-3);
     height: 100%;
   }
 
@@ -399,7 +423,7 @@
 
   .content-panel.active {
     display: block;
-    padding: 20px;
+    padding: var(--space-5);
   }
 
   /* Hamburger button styles */
@@ -452,7 +476,7 @@
       box-shadow: none;
       z-index: 2000;
       /* Extra top padding keeps the fixed hamburger/close button off the header box. */
-      padding: 68px 20px 20px 20px;
+      padding: var(--space-7) var(--space-5) var(--space-5) var(--space-5);
     }
 
     .left-panel.mobile-visible {
@@ -463,7 +487,7 @@
   /* Ensure both main title and breadcrumb use identical VT323 font styling */
 .glossary-font-secondary,
 #project_path {
-  font-family: "VT323", monospace;
+  font-family: var(--FONT_DISPLAY);
   font-size: 1.5rem; /* Explicit size matching h2/h3 scale */
   font-weight: 400;
   font-style: normal;
@@ -499,10 +523,10 @@
 
 .cli-interface {
     background-color: #0d0d0d;
-    color: #00ff66;
-    font-family: 'VT323', monospace;
-    border: 1px solid #00ff66;
-    padding: 10px;
+    color: var(--NEON_GREEN);
+    font-family: var(--FONT_DISPLAY);
+    border: 1px solid var(--NEON_GREEN);
+    padding: var(--space-3);
 
     box-sizing: border-box;
 
@@ -567,7 +591,7 @@
 }
 
 .cli-line.system-msg {
-  color: #00cc55;
+  color: var(--NEON_GREEN);
 }
 
 .cmd-highlight {
@@ -583,7 +607,7 @@
 }
 
 .cli-prompt {
-  color: #00ff66;
+  color: var(--NEON_GREEN);
   font-size: 1.2rem;
   font-weight: bold;
 }
@@ -592,8 +616,9 @@
   background: transparent;
   border: none;
   outline: none;
-  color: #00ff66;
-  font-family: 'VT323', monospace;
+  color: var(--NEON_GREEN);
+  font-family: var(--FONT_DISPLAY);
   font-size: 1.2rem;
   width: 100%;
+  padding: 0;
 }

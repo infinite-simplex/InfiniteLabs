@@ -25,9 +25,9 @@
          and pushes the whole page wider than the viewport. */
       contain: inline-size;
       max-width: 1060px;
-      padding: 0 0 60px;
+      padding: 0 0 var(--space-7);
       color: var(--GRAY);
-      font-family: 'Courier New', monospace;
+      font-family: var(--FONT_BODY);
       font-size: 17px;
       line-height: 1.55;
     }
@@ -43,7 +43,7 @@
     }
     a { color: var(--NEON_GREEN); text-decoration: none; }
     a:hover { text-decoration: underline; }
-    code, .mono { font-family: 'Courier New', monospace; color: var(--NEON_GREEN); }
+    code, .mono { font-family: var(--FONT_BODY); color: var(--NEON_GREEN); }
     strong { color: #e6e6e6; }
 
     /* ---------- boxes ---------- */
@@ -53,7 +53,7 @@
       outline-offset: -5px;
       background-color: var(--BG_COLOR);
       box-shadow: 3px 3px var(--BOX_SHADOW);
-      padding: 16px 18px;
+      padding: var(--space-4) var(--space-4);
     }
 
     header.hero { margin: 26px 0 8px; }
@@ -63,19 +63,19 @@
     .kv .v.warn { color: var(--YELLOW); }
 
     h2 {
-      font-family: 'VT323', monospace; font-weight: 400;
+      font-family: var(--FONT_DISPLAY); font-weight: 400;
       font-size: 2.25rem; color: var(--NEON_GREEN);
       margin: 54px 0 6px; scroll-margin-top: 60px;
-      border-bottom: 1px solid var(--NEON_GREEN); padding-bottom: 4px;
+      border-bottom: 1px solid var(--NEON_GREEN); padding-bottom: var(--space-1);
     }
     h2::before { content: "// "; color: var(--BOX_SHADOW); }
     h3 {
-      font-family: 'VT323', monospace; font-weight: 400;
+      font-family: var(--FONT_DISPLAY); font-weight: 400;
       font-size: 1.75rem; color: var(--NEON_GREEN);
       margin: 30px 0 4px; scroll-margin-top: 60px;
     }
     p { margin: 8px 0; }
-    ul, ol { padding-left: 22px; margin: 8px 0; }
+    ul, ol { padding-left: var(--space-5); margin: 8px 0; }
     li { margin: 3px 0; }
 
     /* ---------- TODO markers ---------- */
@@ -84,13 +84,13 @@
       border: 1px dashed var(--YELLOW);
       background: rgba(255, 255, 0, .07);
       padding: 0 .4em;
-      font-family: 'VT323', monospace; font-size: 1.1em; line-height: 1.2;
+      font-family: var(--FONT_DISPLAY); font-size: 1.1em; line-height: 1.2;
     }
     .todo::before { content: "TODO: "; font-weight: bold; }
     .todo a { color: var(--YELLOW); }
 
     #todoIndex { margin-top: 14px; }
-    #todoIndex summary { cursor: pointer; color: var(--YELLOW); font-family: 'VT323', monospace; font-size: 1.4rem; }
+    #todoIndex summary { cursor: pointer; color: var(--YELLOW); font-family: var(--FONT_DISPLAY); font-size: 1.4rem; }
     #todoIndex ol { font-size: .95em; }
 
     /* ---------- figures ---------- */
@@ -98,10 +98,10 @@
     .fig-head {
       display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center;
       border: 2px solid var(--NEON_GREEN); border-bottom: none;
-      padding: 6px 10px; background: rgba(72,208,75,.06);
-      font-family: 'VT323', monospace; font-size: 1.4rem; color: var(--NEON_GREEN);
+      padding: var(--space-2) var(--space-3); background: rgba(72,208,75,.06);
+      font-family: var(--FONT_DISPLAY); font-size: 1.4rem; color: var(--NEON_GREEN);
     }
-    .fig-head .id { color: var(--BG_COLOR); background: var(--NEON_GREEN); padding: 0 8px; }
+    .fig-head .id { color: var(--BG_COLOR); background: var(--NEON_GREEN); padding: 0 var(--space-2); }
     .fig-head .spacer { flex: 1; }
     .fig-scroll {
       border: 2px solid var(--NEON_GREEN);
@@ -113,13 +113,13 @@
       overflow-x: auto;
     }
     .fig-scroll svg { display: block; width: 100%; min-width: 760px; height: auto; }
-    figcaption { font-size: .95em; color: var(--GRAY); margin-top: 10px; padding: 0 2px; }
+    figcaption { font-size: .95em; color: var(--GRAY); margin-top: 10px; padding: 0 var(--space-1); }
     figcaption strong { color: var(--NEON_GREEN); }
 
     .btn {
       background: var(--BG_COLOR); color: var(--NEON_GREEN);
-      border: 2px solid var(--NEON_GREEN); padding: 1px 10px;
-      font-family: 'VT323', monospace; font-size: 1.25rem; cursor: pointer;
+      border: 2px solid var(--NEON_GREEN); padding: 0 var(--space-3);
+      font-family: var(--FONT_DISPLAY); font-size: 1.25rem; cursor: pointer;
     }
     .btn:hover:not(:disabled) { background: var(--HOVER_COLOR); }
     .btn:disabled { opacity: .35; cursor: default; }
@@ -135,10 +135,10 @@
     .legend .r i { width: 9px; height: 9px; background: var(--RED_HI); }
 
     /* svg pieces */
-    svg text { font-family: 'Courier New', monospace; }
+    svg text { font-family: var(--FONT_BODY); }
     .node rect.outer { fill: var(--BG_COLOR); stroke: var(--NEON_GREEN); stroke-width: 2; transition: fill .2s; }
     .node rect.inner { fill: none; stroke: var(--NEON_GREEN); stroke-width: 1; opacity: .55; }
-    .node text.t { font-family: 'VT323', monospace; font-size: 20px; fill: var(--NEON_GREEN); }
+    .node text.t { font-family: var(--FONT_DISPLAY); font-size: 20px; fill: var(--NEON_GREEN); }
     .node text.s { font-size: 12.5px; fill: var(--GRAY); }
     .node.lit rect.outer { fill: rgba(72,208,75,.22); }
     .node.leader rect.outer { stroke-width: 3; filter: drop-shadow(0 0 5px var(--BOX_SHADOW)); }
@@ -150,7 +150,7 @@
     .node.blue rect.outer, .node.blue rect.inner { stroke: var(--BLUE_HI); }
     .node.blue text.t { fill: var(--BLUE_HI); }
     .frame { fill: none; stroke: var(--NEON_GREEN); stroke-dasharray: 6 4; opacity: .45; }
-    .frame-label { font-family: 'VT323', monospace; font-size: 17px; fill: var(--NEON_GREEN); opacity: .75; }
+    .frame-label { font-family: var(--FONT_DISPLAY); font-size: 17px; fill: var(--NEON_GREEN); opacity: .75; }
     .trace { fill: none; stroke: rgba(72,208,75,.38); stroke-width: 2; stroke-linejoin: miter; }
     .trace.udp { stroke: rgba(3,118,250,.55); }
     .trace.hb { stroke: rgba(255,255,0,.30); }
@@ -165,19 +165,19 @@
     .xmark { stroke: var(--RED_HI); stroke-width: 2.5; }
     .cell { fill: var(--BG_COLOR); stroke: var(--NEON_GREEN); stroke-width: 1.5; }
     .cell.full { fill: rgba(72,208,75,.28); }
-    .cell-t { font-family: 'VT323', monospace; font-size: 20px; fill: var(--NEON_GREEN); text-anchor: middle; }
-    .ptr-t { font-family: 'VT323', monospace; font-size: 18px; text-anchor: middle; }
-    .stamp-t { font-family: 'VT323', monospace; font-size: 19px; text-anchor: middle; fill: var(--NEON_GREEN); }
+    .cell-t { font-family: var(--FONT_DISPLAY); font-size: 20px; fill: var(--NEON_GREEN); text-anchor: middle; }
+    .ptr-t { font-family: var(--FONT_DISPLAY); font-size: 18px; text-anchor: middle; }
+    .stamp-t { font-family: var(--FONT_DISPLAY); font-size: 19px; text-anchor: middle; fill: var(--NEON_GREEN); }
     .stamp-s { font-size: 12.5px; text-anchor: middle; fill: var(--GRAY); }
-    .seg-t { font-family: 'VT323', monospace; font-size: 19px; text-anchor: middle; fill: var(--GRAY); }
+    .seg-t { font-family: var(--FONT_DISPLAY); font-size: 19px; text-anchor: middle; fill: var(--GRAY); }
     .marker { fill: var(--BG_COLOR); stroke: var(--NEON_GREEN); stroke-width: 2; transition: fill .2s; }
     .marker.lit { fill: var(--NEON_GREEN); }
 
     /* CLI-style log under interactive figures */
     .cli-log {
-      background: #0d0d0d; color: #00cc55; border: 1px solid #00ff66; border-top: none;
-      font-family: 'VT323', monospace; font-size: 1.3rem; line-height: 1.2;
-      padding: 8px 12px; min-height: 8.2em;
+      background: #0d0d0d; color: var(--NEON_GREEN); border: 1px solid var(--NEON_GREEN); border-top: none;
+      font-family: var(--FONT_DISPLAY); font-size: 1.3rem; line-height: 1.2;
+      padding: var(--space-2) var(--space-3); min-height: 8.2em;
     }
     .cli-log div { word-break: break-word; }
     .cli-log .err { color: #ff3333; }
@@ -185,9 +185,9 @@
     .cli-log .dim { color: #6c8f7a; }
 
     /* bitmap figure (HTML) */
-    .bm { padding: 12px 12px 14px; }
+    .bm { padding: var(--space-3) var(--space-3) var(--space-4); }
     .bm-row { margin: 10px 0 2px; }
-    .bm-label { font-family: 'VT323', monospace; font-size: 1.35rem; color: var(--NEON_GREEN); }
+    .bm-label { font-family: var(--FONT_DISPLAY); font-size: 1.35rem; color: var(--NEON_GREEN); }
     .bm-cells { display: grid; grid-template-columns: repeat(101, minmax(6px, 1fr)); gap: 1px; min-width: 700px; }
     .bm-cells button {
       height: 22px; padding: 0; cursor: pointer;
@@ -207,10 +207,10 @@
     .tscroll { overflow-x: auto; }
     table.spec { border-collapse: collapse; width: 100%; font-size: .95em; }
     table.spec th {
-      font-family: 'VT323', monospace; font-weight: 400; font-size: 1.3rem; text-align: left;
-      color: var(--NEON_GREEN); border-bottom: 2px solid var(--NEON_GREEN); padding: 4px 8px;
+      font-family: var(--FONT_DISPLAY); font-weight: 400; font-size: 1.3rem; text-align: left;
+      color: var(--NEON_GREEN); border-bottom: 2px solid var(--NEON_GREEN); padding: var(--space-1) var(--space-2);
     }
-    table.spec td { border-bottom: 1px solid rgba(72,208,75,.28); padding: 5px 8px; vertical-align: top; }
+    table.spec td { border-bottom: 1px solid rgba(72,208,75,.28); padding: var(--space-1) var(--space-2); vertical-align: top; }
     table.spec td.n { white-space: nowrap; color: var(--NEON_GREEN); }
     /* for tables whose first column holds long names (e.g. template signatures) */
     table.spec.wrapfirst td.n { white-space: normal; overflow-wrap: break-word; min-width: 11em; }
@@ -218,29 +218,29 @@
     .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(310px, 100%), 1fr)); gap: 14px; margin-top: 12px; }
     .card {
       border: 1px solid var(--NEON_GREEN); outline: 1px solid var(--NEON_GREEN); outline-offset: -4px;
-      box-shadow: 3px 3px var(--BOX_SHADOW); padding: 14px 14px 12px; background: var(--BG_COLOR);
+      box-shadow: 3px 3px var(--BOX_SHADOW); padding: var(--space-4) var(--space-4) var(--space-3); background: var(--BG_COLOR);
     }
-    .card h4 { font-family: 'VT323', monospace; font-weight: 400; font-size: 1.5rem; color: var(--NEON_GREEN); margin: 0 0 4px; line-height: 1.1; }
+    .card h4 { font-family: var(--FONT_DISPLAY); font-weight: 400; font-size: 1.5rem; color: var(--NEON_GREEN); margin: 0 0 4px; line-height: 1.1; }
     .card p { margin: 5px 0; font-size: .95em; }
     .card .buys, .card .costs { position: relative; padding-left: 4.6em; }
-    .card .lbl { position: absolute; left: 0; top: 0; font-family: 'VT323', monospace; font-size: 1.2rem; line-height: 1.5; }
+    .card .lbl { position: absolute; left: 0; top: 0; font-family: var(--FONT_DISPLAY); font-size: 1.2rem; line-height: 1.5; }
     .card .buys .lbl { color: var(--NEON_GREEN); }
     .card .costs .lbl { color: var(--RED_HI); }
     .card .where { font-size: .85em; color: #8a9a95; margin-top: 6px; }
 
     .note {
-      border-left: 4px solid var(--NEON_GREEN); padding: 6px 12px; margin: 12px 0;
+      border-left: 4px solid var(--NEON_GREEN); padding: var(--space-2) var(--space-3); margin: 12px 0;
       background: rgba(72,208,75,.05);
     }
     .note.limit { border-left-color: var(--RED_HI); background: rgba(255,51,51,.05); }
-    .note b.tag { font-family: 'VT323', monospace; font-weight: 400; font-size: 1.3rem; color: var(--NEON_GREEN); }
+    .note b.tag { font-family: var(--FONT_DISPLAY); font-weight: 400; font-size: 1.3rem; color: var(--NEON_GREEN); }
     .note.limit b.tag { color: var(--RED_HI); }
 
     pre.code {
-      background: #0d0d0d; color: #00ff66; border: 1px solid #00ff66;
-      padding: 10px 12px; overflow-x: auto; font-size: 14.5px; line-height: 1.4; margin: 10px 0;
+      background: #0d0d0d; color: var(--NEON_GREEN); border: 1px solid var(--NEON_GREEN);
+      padding: var(--space-3); overflow-x: auto; font-size: 14.5px; line-height: 1.4; margin: 10px 0;
     }
-    footer { margin-top: 60px; border-top: 1px solid var(--NEON_GREEN); padding-top: 12px; font-size: .9em; }
+    footer { margin-top: 60px; border-top: 1px solid var(--NEON_GREEN); padding-top: var(--space-3); font-size: .9em; }
 
     @media (max-width: 700px) {
       :scope { font-size: 15.5px; }

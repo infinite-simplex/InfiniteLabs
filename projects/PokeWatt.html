@@ -7,26 +7,26 @@
   .fig-head input[type=range] { accent-color: var(--NEON_GREEN); }
   .fig-head input[type=number] {
     width: 4.2em; background: var(--BG_COLOR); color: var(--NEON_GREEN); border: 2px solid var(--NEON_GREEN);
-    font-family: 'VT323', monospace; font-size: 1.2rem; padding: 0 4px;
+    font-family: var(--FONT_DISPLAY); font-size: 1.2rem; padding: 0 var(--space-1);
   }
   .fig-body {
-    border: 2px solid var(--NEON_GREEN); box-shadow: 3px 3px var(--BOX_SHADOW); padding: 12px 14px;
+    border: 2px solid var(--NEON_GREEN); box-shadow: 3px 3px var(--BOX_SHADOW); padding: var(--space-3) var(--space-4);
     background: linear-gradient(rgba(72,208,75,.05) 1px, transparent 1px) 0 0 / 100% 20px,
                 linear-gradient(90deg, rgba(72,208,75,.05) 1px, transparent 1px) 0 0 / 20px 100%, #010a12;
   }
   .fig-body input[type=range] { width: 100%; accent-color: var(--NEON_GREEN); }
-  .readout { font-family: 'VT323', monospace; font-size: 1.45rem; color: var(--NEON_GREEN); margin: 4px 0 2px; }
+  .readout { font-family: var(--FONT_DISPLAY); font-size: 1.45rem; color: var(--NEON_GREEN); margin: 4px 0 2px; }
   .readout b { color: var(--YELLOW); font-weight: normal; }
   .quip { min-height: 3.1em; margin: 2px 0 8px; }
 
   /* the spinning ASCII Mewtwo */
   .ascii-box {
-    border: 2px solid var(--NEON_GREEN); box-shadow: 3px 3px var(--BOX_SHADOW); padding: 12px; overflow: hidden;
+    border: 2px solid var(--NEON_GREEN); box-shadow: 3px 3px var(--BOX_SHADOW); padding: var(--space-3); overflow: hidden;
     background: #010a12; display: flex; justify-content: center; cursor: grab; touch-action: pan-y; user-select: none;
   }
   .ascii-box:active { cursor: grabbing; }
   .ascii-box pre {
-    margin: 0; font-family: 'Courier New', monospace; line-height: 1.2; white-space: pre;
+    margin: 0; font-family: var(--FONT_BODY); line-height: 1.2; white-space: pre;
     color: var(--NEON_GREEN); text-shadow: 0 0 6px rgba(72,208,75,.45);
     min-height: calc(32 * 1.2em); /* keeps the box from jumping while the frames load */
   }
@@ -34,7 +34,7 @@
   /* raw screenshots from the game */
   .shots {
     display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px;
-    border: 2px solid var(--NEON_GREEN); box-shadow: 3px 3px var(--BOX_SHADOW); padding: 12px;
+    border: 2px solid var(--NEON_GREEN); box-shadow: 3px 3px var(--BOX_SHADOW); padding: var(--space-3);
     background: #010a12;
   }
   .shots figure { margin: 0; }
@@ -42,20 +42,20 @@
     display: block; width: 100%; aspect-ratio: 800 / 431; object-fit: cover;
     image-rendering: pixelated; border: 1px solid rgba(72,208,75,.55);
   }
-  .shots .cap { font-family: 'VT323', monospace; font-size: 1.2rem; color: var(--NEON_GREEN); margin-top: 4px; }
+  .shots .cap { font-family: var(--FONT_DISPLAY); font-size: 1.2rem; color: var(--NEON_GREEN); margin-top: 4px; }
   @media (max-width: 640px) { .shots { grid-template-columns: 1fr; } }
 
   /* the odds bars */
   .odds { display: grid; grid-template-columns: 7.2em 1fr 3.4em; gap: 4px 10px; align-items: center; margin: 8px 0; }
-  .odds .lbl { font-family: 'VT323', monospace; font-size: 1.25rem; color: var(--NEON_GREEN); }
+  .odds .lbl { font-family: var(--FONT_DISPLAY); font-size: 1.25rem; color: var(--NEON_GREEN); }
   .odds .lbl.r3 { color: var(--YELLOW); }
   .odds .track { height: 16px; border: 1px solid rgba(72,208,75,.55); background: var(--BG_COLOR); }
   .odds .fill { display: block; height: 100%; background: rgba(72,208,75,.7); transition: width .25s; }
   .odds .fill.r3 { background: var(--YELLOW); }
-  .odds .pct { text-align: right; font-family: 'VT323', monospace; font-size: 1.25rem; }
+  .odds .pct { text-align: right; font-family: var(--FONT_DISPLAY); font-size: 1.25rem; }
 
   /* strips under sliders */
-  .strip { display: flex; height: 22px; margin: 4px 0 2px; border: 1px solid rgba(72,208,75,.55); font-family: 'VT323', monospace; font-size: 1.05rem; }
+  .strip { display: flex; height: 22px; margin: 4px 0 2px; border: 1px solid rgba(72,208,75,.55); font-family: var(--FONT_DISPLAY); font-size: 1.05rem; }
   .strip span { display: flex; align-items: center; justify-content: center; overflow: hidden; white-space: nowrap; color: var(--BG_COLOR); border-right: 1px solid var(--BG_COLOR); }
   .strip span:last-child { border-right: none; }
   .strip .z1 { background: #3d9bff; } .strip .z2 { background: #48d04b; } .strip .z3 { background: #d6e84a; }

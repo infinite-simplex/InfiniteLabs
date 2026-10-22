@@ -6,7 +6,6 @@ export function mount(root) {
 const R = createRuntime(root);
 const { $, el, Scene, sleep, travel, trace, node, label, frameBox, flash, xmark, REDUCED } = R;
 const { GREEN, BLUE, YEL, GRAYC, REDC } = R.colors;
-R.todoIndex();
 
 /* =====================================================================
    FIG 1 — system topology

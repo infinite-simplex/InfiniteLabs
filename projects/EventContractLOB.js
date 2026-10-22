@@ -6,7 +6,6 @@ export function mount(root) {
 const R = createRuntime(root);
 const { $, el, Scene, sleep, travel, trace, node, label, frameBox, flash, xmark, REDUCED } = R;
 const { GREEN, BLUE, YEL, GRAYC, REDC } = R.colors;
-R.todoIndex();
 
 /* =====================================================================
    FIG 1 — what the LOB plugs into Core
@@ -22,7 +21,7 @@ R.todoIndex();
     t.textContent = s;
   };
   cap(10, 28, 'TOYEXCHANGE · CORE — generic templates', GREEN);
-  cap(10, 226, 'EVENTCONTRACTLOB — what this repo supplies', BLUE);
+  cap(10, 340, 'EVENTCONTRACTLOB — product implementations', BLUE);
 
   const core = [
     node(nodeLayer, { x: X[0], y: 40, w: W, h: 72, title: 'NetworkGateway', sub: ['<TProtocolHandler, TCommand>', 'sequences + replicates'] }),

@@ -1,5 +1,3 @@
-// Behavior for the EventContractLOB explainer. Loaded by script.js via import(); mount(root) wires up the
-// figures inside root and returns unmount(), which script.js calls when the panel is replaced.
 import { createRuntime } from './shared/explainer.js';
 
 export function mount(root) {
@@ -42,7 +40,6 @@ const { GREEN, BLUE, YEL, GRAYC, REDC } = R.colors;
   label(svg, X[0] + W / 2 + 34, 180, 'plugs in', { cls: 'udp' });
 
   const flows = [
-    // the gap between columns is only 40 wide, so the jog is a small step in the middle
     trace(traceLayer, [[X[0] + W, 76], [X[0] + W + 10, 76], [X[0] + W + 10, 88], [X[1] - 10, 88], [X[1] - 10, 76], [X[1], 76]], '', { r: 4 }),
     trace(traceLayer, [[X[1] + W, 76], [X[1] + W + 10, 76], [X[1] + W + 10, 88], [X[2] - 10, 88], [X[2] - 10, 76], [X[2], 76]], '', { r: 4 }),
   ];
@@ -70,9 +67,6 @@ const { GREEN, BLUE, YEL, GRAYC, REDC } = R.colors;
   const ROW_Y = { 52: 30, 51: 96, 50: 162 }, ROW_H = 54;
   const FIRM = { A: GREEN, B: BLUE };
 
-  // Both scenarios are lifted from tests in ProductTesting.cpp:
-  //   sweep — SweepAcrossThreeLevelsWithFinalPartialFillProducesThreeFillPairs
-  //   stp   — EarlierFillsAgainstOtherFirmsStillFireBeforeHittingOwnOrder
   const SCENARIOS = {
     sweep: { desc: 'BID 250 @ 52', firm: 'B', qty: 250,
              book: { 50: [{ firm: 'A', qty: 100 }], 51: [{ firm: 'A', qty: 100 }], 52: [{ firm: 'A', qty: 100 }] } },
@@ -249,10 +243,8 @@ const { GREEN, BLUE, YEL, GRAYC, REDC } = R.colors;
     node(nodeLayer, { x: bx(i), y: by, w: BW, h: BH, title: `SLOT ${o.slot}`,
       sub: [`${o.id} · qty ${o.qty}`, `prev ${o.prev} · next ${o.next}`], cls: i === 0 ? 'blue' : '' });
   });
-  // head arrow (to the front of the queue), tail arrow (to the back)
   trace(traceLayer, [[210, 84], [230, 84], [230, 92], [bx(0), 92]], '', { r: 5 });
   trace(traceLayer, [[210, 150], [230, 150], [230, 206], [bx(2) + 50, 206], [bx(2) + 50, by + BH]], '', { r: 6 });
-  // next links (forward) and prev links (back)
   for (let i = 0; i < 2; i++) {
     trace(traceLayer, [[bx(i) + BW, 84], [bx(i + 1), 84]], 'udp', { vias: false, r: 4 });
     trace(traceLayer, [[bx(i + 1), 118], [bx(i) + BW, 118]], 'hb', { vias: false, r: 4 });
@@ -263,7 +255,6 @@ const { GREEN, BLUE, YEL, GRAYC, REDC } = R.colors;
   t(bx(0), 50, 'head — first in line', 'start');
   t(240, 224, 'tail — O(1) append', 'start');
 
-  // free pool (a stack: the top slot is handed out next)
   const px = 800, PW = 150;
   el('text', { x: px + PW / 2, y: 38, 'text-anchor': 'middle', fill: GREEN, 'font-family': 'VT323', 'font-size': 18 }, nodeLayer).textContent = 'FREE POOL · stack';
   ['slot 5', 'slot 12', 'slot 0', '…'].forEach((s, i) => {
@@ -272,7 +263,6 @@ const { GREEN, BLUE, YEL, GRAYC, REDC } = R.colors;
     el('text', { class: 'cell-t', x: px + PW / 2 + 8, y: y + 21 }, nodeLayer).textContent = s;
     if (i === 0) el('text', { x: px + 8, y: y + 19, fill: YEL, 'font-size': 11 }, nodeLayer).textContent = '▸ top';
   });
-  // insert (pop) and release (push) routes
   trace(traceLayer, [[px, 67], [px - 24, 67], [px - 24, by + 39], [bx(2) + BW, by + 39]], 'udp', { r: 6 });
   trace(traceLayer, [[bx(2) + BW - 30, by + BH], [bx(2) + BW - 30, 250], [px + PW / 2, 250], [px + PW / 2, 52 + 3 * 36 + 30]], 'hb', { r: 6 });
   label(svg, 770, 48, 'insert: pop a slot, link at tail', { cls: 'udp', anchor: 'end' });

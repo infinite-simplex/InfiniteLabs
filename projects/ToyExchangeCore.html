@@ -4,9 +4,9 @@
 <header class="hero">
   <div class="box">
     <div class="kv"><span class="k">SUBTITLE:</span> <span class="v">The product-agnostic half of an exchange: sequenced ingress, replicated matching, epoch-fenced egress, and a measurement path</span></div>
-    <div class="kv"><span class="k">STATUS:</span> <span class="v warn">OPERATIONAL (V0.3.0)</span></div>
+    <div class="kv"><span class="k">STATUS:</span> <span class="v warn">OPERATIONAL (V0.4.0)</span></div>
     <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.10.16</span></div>
-    <div class="kv"><span class="k">STACK:</span> <span class="v">C++20 · header-only CMake library · Linux (epoll, mmap, multicast, CLOCK_TAI) · HdrHistogram_c · googletest</span></div>
+    <div class="kv"><span class="k">STACK:</span> <span class="v">C++20 · header-only CMake library · Linux x86-64 (epoll, mmap, multicast, calibrated TSC clock with a CLOCK_TAI fallback) · HdrHistogram_c · googletest</span></div>
     <div class="kv"><span class="k">SOURCE:</span>
       <a href="https://github.com/infinite-simplex/ToyExchange" target="_blank">→ ToyExchange</a> &nbsp;
       <a href="https://github.com/infinite-simplex/EventContractLOB" target="_blank">→ EventContractLOB (reference product)</a> &nbsp;
@@ -108,7 +108,9 @@
   <li><strong>Sequence.</strong> The ingress thread stamps a monotonically increasing sequence number from a plain counter. The same number doubles as the telemetry trace id.
       It also records the socket-read time and which client session sent the command.</li>
   <li><strong>Append, then send.</strong> The sequenced message is written into a memory-mapped ring (<code>SequenceStore</code>) <em>before</em> it is multicast, for possbile retransmission.</li>
-  <li><strong>Fan out.</strong> One UDP multicast <code>sendto()</code> up to one datagram's worth (1,400 bytes by default), to every replica.</li>
+  <li><strong>Fan out.</strong> One UDP multicast <code>sendto()</code> up to one datagram's worth (1,400 bytes by default), to every replica.
+      With <code>NetworkConfig::ingressGsoSegments</code> above 1 (off by default) one send carries up to that many datagrams and the kernel cuts it back into datagrams of the same size limit (UDP GSO).
+      Only what this pass already sequenced is sent, so nothing waits for a send to fill.</li>
   <li><strong>Receive and check.</strong> Each replica's receiver thread compares the sequence number with the one it expects. A gap triggers recovery (below),
       and a number older than expected is a duplicate and is dropped. In-order messages are pushed into the replica's inbound SPSC queue.</li>
   <li><strong>Match <em>(product)</em>.</strong> A matching thread spins on that queue, pops a command, performs the matching algorithm, then pushes an event into an output SPSC queue.</li>
@@ -211,6 +213,7 @@
     <tr><td>Retransmit batch / attempts / timeout</td><td class="n">500 / 3 / 200 ms</td><td>receiver and retransmit server</td></tr>
     <tr><td>Idle probe</td><td class="n">after 200 ms of silence · 1 attempt</td><td>receiver, on its receive timeout; <code>NetworkConfig::ingressIdleProbe</code> turns it off</td></tr>
     <tr><td>Datagram size limit</td><td class="n">1,400 bytes</td><td>gateway fan-out and retransmit replies; <code>NetworkConfig::ingressDatagramMaxBytes</code>. Whole records only, at least one. Stay under the path MTU minus 28 bytes, or the network fragments the datagram</td></tr>
+    <tr><td>Datagrams per send</td><td class="n">1 (GSO off)</td><td>gateway fan-out; <code>NetworkConfig::ingressGsoSegments</code>. Up to that many datagrams of the size limit above leave in one <code>sendto()</code> (UDP GSO, Linux 4.18 or later), so the sender pays for the network stack once per send. Only what the pass already sequenced is sent, so a lone command still goes out alone. Past about 5 million commands/s on one host the receivers fall behind: see Ingress throughput.</td></tr>
     <tr><td>Receiver spin window</td><td class="n">0 µs (off)</td><td>receiver; <code>NetworkConfig::ingressSpinMicros</code>. After each datagram the receiver polls for that long before it blocks, so a sender does not pay to wake it. Costs one busy thread per replica while traffic flows; an idle receiver never spins</td></tr>
     <tr><td>Ingress receive buffer</td><td class="n">4 MiB requested</td><td>receiver, on the multicast socket and the retransmit-reply socket; <code>NetworkConfig::ingressReceiveBufferBytes</code>. Linux caps the request at <code>net.core.rmem_max</code> (default 212,992 bytes), so raise that sysctl on the host. </td></tr>
     <tr><td>Egress datagram limit</td><td class="n">1,400 bytes</td><td>publisher datagrams (a 24-byte header, then whole events, at least one) and the public feed's datagrams; <code>NetworkConfig::egressDatagramMaxBytes</code>. The same path-MTU rule applies</td></tr>
@@ -333,10 +336,11 @@
 
   <div class="card">
     <h4>Two clocks</h4>
-    <p><code>rdtscp</code> for timings that stay on one machine; <code>CLOCK_TAI</code> for anything that may be compared across machines. TAI has no leap seconds, so it can't step backwards the way <code>CLOCK_REALTIME</code> can.</p>
-    <p class="buys"><span class="lbl">BUYS</span> Cheap local timing, and cross-machine deltas that don't go negative.</p>
-    <p class="costs"><span class="lbl">COSTS</span> Cross-machine numbers are only as good as the clock sync. Core uses PTP for clock synchronization; no plans to adopt white rabbit.</p>
-    <p class="where">Core/Telemetry.hpp · Tools/ptp/</p>
+    <p><code>rdtscp</code> for timings that stay on one machine; TAI for anything that may be compared across machines. TAI has no leap seconds, so it can't step backwards the way <code>CLOCK_REALTIME</code> can.
+      The TAI reading comes from a calibrated TSC clock: a background thread re-fits a model of the TSC against <code>CLOCK_TAI</code> every 10&nbsp;ms, and a read is one <code>rdtsc</code>, a seqlock read and a multiply. Without an invariant TSC it is <code>clock_gettime(CLOCK_TAI)</code>, as before.</p>
+    <p class="buys"><span class="lbl">BUYS</span> Cheap local timing, cross-machine deltas that don't go negative, and a TAI read in about 37 cycles instead of 93.</p>
+    <p class="costs"><span class="lbl">COSTS</span> It agrees with the system clock to about 20&nbsp;ns, the limit of what the measurement could resolve. It follows a step of the system clock within about 10&nbsp;ms rather than at once, the unfenced read can stamp a few tens of nanoseconds early, and each process gets a calibrator thread (about 20&nbsp;ms added to start-up). Cross-machine numbers are only as good as the clock sync. Core uses PTP for clock synchronization; no plans to adopt white rabbit.</p>
+    <p class="where">Core/Telemetry.hpp · Core/TscClock.hpp · Tools/ptp/</p>
   </div>
 
   <div class="card">
@@ -396,7 +400,7 @@
 
 <h3>Benchmark Results</h3>
 <p>
-  This was done locally on my machine, an AMD Ryzen 7 5800X under WSL2, every process on one host. Testing environment used 128 byte records. Each cell is the median of three 5-second runs.
+  This was done locally on my machine, an AMD Ryzen 7 5800X, every process on one host. Testing environment used 128 byte records. Each cell is the median of three 5-second runs. The Core rows are from when this comparison was made; today's ingress numbers are under Ingress throughput below.
   The Aeron UDP rows use one media driver per replica, which is how separate hosts behave. Two replicas that share one driver also share one received stream, and that hides the slow-replica problem below.
 </p>
 
@@ -442,71 +446,81 @@
 </ul>
 
 <div class="note limit"><b class="tag">LIMITS OF THIS TEST</b>
-  One machine under WSL2, so tail latencies include hypervisor noise. No tuning besides a few driver settings. The result is for this design on this setup, not a general claim about Aeron.</div>
+  One machine with every process on it, so tail latencies include scheduling noise. No tuning besides a few driver settings. The result is for this design on this setup, not a general claim about Aeron.</div>
+
+<h3>Ingress throughput</h3>
+<p>
+  <code>IngressBench</code> runs Core's ingress without a product: the gateway, two replicas' receivers and a stand-in matching thread, all on one machine with the multicast on loopback.
+  With the default settings it delivers about 2.9 million commands per second to both replicas. Setting <code>ingressGsoSegments</code> to 4 lets one send carry four datagrams and raises that to about 5 million, with the same latency at ordinary rates.
+  Records were 128 bytes and the client sent 8-byte frames. Each cell is the median of four 3-second runs, with the two settings run in alternation.
+</p>
+
+<div class="tscroll">
+<table class="spec">
+  <thead><tr><th>Offered</th><th>One datagram per send: p50 / p99</th><th>Four per send: p50 / p99</th></tr></thead>
+  <tbody>
+    <tr><td class="n">100,000/s</td><td>22 / 55&nbsp;µs</td><td>22 / 52&nbsp;µs</td></tr>
+    <tr><td class="n">500,000/s</td><td>21 / 76&nbsp;µs</td><td>21 / 77&nbsp;µs</td></tr>
+    <tr><td class="n">2,500,000/s</td><td>1.8&nbsp;ms / 6.4&nbsp;ms</td><td>28&nbsp;µs / 2.6&nbsp;ms</td></tr>
+    <tr><td class="n">4,000,000/s</td><td>falls behind: 2.83 million/s delivered, p50 767&nbsp;ms</td><td>4.0 million/s delivered, 1.1&nbsp;ms / 5.0&nbsp;ms</td></tr>
+    <tr><td class="n">As fast as the client can send</td><td>2.88 million/s delivered</td><td>4.98 million/s delivered</td></tr>
+  </tbody>
+</table>
+</div>
+<p>
+  At low rates a send holds a single record, so sending four at a time changes nothing. It helps once the gateway's send path is the limit.
+  It is off by default, and past about 5 million commands/s the receivers fall behind, so raise it only as far as you need.
+</p>
+
+<div class="note limit"><b class="tag">LIMITS OF THIS TEST</b>
+  On loopback the kernel does the receivers' packet work inside the gateway's own send calls, which is a large share of the gateway's time here and would not be there across a network. GSO on a real network card was not tested.</div>
 
 <!-- =====================================================================
      RESULTS
      ===================================================================== -->
 <h2 id="results">END TO END RESULTS</h2>
 <p>
-  These are the first end-to-end numbers. Core needs a product on top to run, so every run used one product as the testing ground: EventContractLOB.
-  The numbers describe Core's pipeline only. Every process ran on one machine, in one WSL2 virtual machine: the gateway, two replicas, <code>PerformanceServiceApp</code>, and the product's load generator.
+  Core needs a product on top to run, so every run used one product as the testing ground: EventContractLOB.
+  The numbers describe Core's pipeline only. Every process ran on one machine: the gateway, two replicas, <code>PerformanceServiceApp</code>, and the product's load generator.
   The generator sends a seeded mix of limit orders (55%), immediate-or-cancel orders (15%), cancels (20%) and replaces (10%), in 1&nbsp;ms bursts.
   Each cell is the median, over the one-second windows of both replicas, of that window's percentile. The max column is the largest value in any window. 
   Engine-side numbers (<code>EngineExecutionNs</code> and the product counters) belong to the product and are not reported here.
-  Core v0.3.0 introduces better egress handling, and the measurements are included for reference. 
 </p>
 
-<h3>At 100,000 orders/s, before the egress rework</h3>
-<p>24 windows from a 15-second run on Core v0.2.1, when the leader published each event as its own datagram.</p>
-<div class="tscroll">
-<table class="spec">
-  <thead><tr><th>Pipeline metric</th><th>p50</th><th>p99</th><th>p99.99</th><th>max</th></tr></thead>
-  <tbody>
-    <tr><td class="n">NetworkDelayNs</td><td>167&nbsp;µs</td><td>8.8&nbsp;ms</td><td>11.5&nbsp;ms</td><td>12.5&nbsp;ms</td></tr>
-    <tr><td class="n">QueuingDelayNs</td><td>1.0&nbsp;µs</td><td>15.4&nbsp;ms</td><td>18.0&nbsp;ms</td><td>22.5&nbsp;ms</td></tr>
-    <tr><td class="n">InboundQDepth <span style="opacity:.7">(commands)</span></td><td>5</td><td>about 1,024 (full)</td><td>about 1,024 (full)</td><td>about 1,024 (full)</td></tr>
-  </tbody>
-</table>
-</div>
-<p>
-  The tail is milliseconds: the replicas' inbound queues repeatedly fill, and the leader changes about three times a second. The next table shows the same run after the egress rework.
-</p>
-
-<h3>At 100,000 orders/s, after the egress rework</h3>
+<h3>At 100,000 orders/s</h3>
 <p>24 windows from a 15-second run, with Core's defaults (blocking receivers, console echo on). Leader changes: 0. Sequence gaps: 0. Egress events that never arrived: 0.</p>
 <div class="tscroll">
 <table class="spec">
   <thead><tr><th>Pipeline metric</th><th>p50</th><th>p99</th><th>p99.99</th><th>max</th></tr></thead>
   <tbody>
-    <tr><td class="n">NetworkDelayNs</td><td>182&nbsp;µs</td><td>665&nbsp;µs</td><td>1.05&nbsp;ms</td><td>2.57&nbsp;ms</td></tr>
-    <tr><td class="n">QueuingDelayNs</td><td>1.3&nbsp;µs</td><td>62&nbsp;µs</td><td>249&nbsp;µs</td><td>1.56&nbsp;ms</td></tr>
-    <tr><td class="n">InboundQDepth <span style="opacity:.7">(commands)</span></td><td>6</td><td>35</td><td>88</td><td>135</td></tr>
+    <tr><td class="n">NetworkDelayNs</td><td>27&nbsp;µs</td><td>65&nbsp;µs</td><td>168&nbsp;µs</td><td>1.77&nbsp;ms</td></tr>
+    <tr><td class="n">QueuingDelayNs</td><td>0.38&nbsp;µs</td><td>1.64&nbsp;µs</td><td>23&nbsp;µs</td><td>54&nbsp;µs</td></tr>
+    <tr><td class="n">InboundQDepth <span style="opacity:.7">(commands)</span></td><td>3</td><td>11</td><td>31</td><td>94</td></tr>
   </tbody>
 </table>
 </div>
 <p>
-  The median moved little (<code>NetworkDelayNs</code> from 167 to 182&nbsp;µs, <code>QueuingDelayNs</code> from 1.0 to 1.3&nbsp;µs). The tail fell: the p99 of <code>NetworkDelayNs</code> went from 8.8&nbsp;ms to 665&nbsp;µs (13 times lower), and the p99 of <code>QueuingDelayNs</code> from 15.4&nbsp;ms to 62&nbsp;µs (250 times lower).
-  The inbound queue no longer fills (largest depth 135, against about 1,024), which points to the same cause as the leader changes (see below).
+  Both replicas end with identical books. The inbound queue never holds more than 94 commands, so the matching thread keeps up, and the worst delay in any window is under 2&nbsp;ms.
 </p>
 
-<h3>At 500,000 orders/s, after the egress rework, tuned</h3>
+<h3>At 500,000 orders/s</h3>
 <p>
-  Three 4-second runs (2.0 million orders each). The receiver spin window was 100&nbsp;µs and the console echo was off; Core's defaults reached about 335,000 orders/s at this target (see below).
-  The runs are short, so each gives 8 windows with the first one dropped. The cells are the median of the three runs, and the max is the largest in any run.
+  Three 4-second runs (2.0 million orders each) with Core's defaults. The runs are short, so each gives 6 windows once the first and last are dropped.
+  The cells are the median of the three runs, and the max is the largest in any run.
 </p>
 <div class="tscroll">
 <table class="spec">
   <thead><tr><th>Pipeline metric</th><th>p50</th><th>p99</th><th>p99.99</th><th>max</th></tr></thead>
   <tbody>
-    <tr><td class="n">NetworkDelayNs</td><td>77&nbsp;µs</td><td>589&nbsp;µs</td><td>1.34&nbsp;ms</td><td>4.2&nbsp;ms</td></tr>
-    <tr><td class="n">QueuingDelayNs</td><td>0.68&nbsp;µs</td><td>24&nbsp;µs</td><td>387&nbsp;µs</td><td>847&nbsp;µs</td></tr>
-    <tr><td class="n">InboundQDepth <span style="opacity:.7">(commands)</span></td><td>3</td><td>21</td><td>231</td><td>639</td></tr>
+    <tr><td class="n">NetworkDelayNs</td><td>30&nbsp;µs</td><td>65&nbsp;µs</td><td>1.22&nbsp;ms</td><td>2.58&nbsp;ms</td></tr>
+    <tr><td class="n">QueuingDelayNs</td><td>0.33&nbsp;µs</td><td>1.43&nbsp;µs</td><td>10&nbsp;µs</td><td>359&nbsp;µs</td></tr>
+    <tr><td class="n">InboundQDepth <span style="opacity:.7">(commands)</span></td><td>3</td><td>10.5</td><td>30</td><td>371</td></tr>
   </tbody>
 </table>
 </div>
 <p>
-  <code>NetworkDelayNs</code> is lower than at 100,000 orders/s. That fits receivers that spin and so are awake when a datagram arrives, but I did not isolate it by running 100,000 orders/s with the same settings.
+  The product advises two settings for load: a 100&nbsp;µs receiver spin window and the console echo off. In three more runs with them the median <code>NetworkDelayNs</code> was 25&nbsp;µs, the p99 214&nbsp;µs and the p99.99 1.13&nbsp;ms.
+  The stack kept up either way, so on this machine they did not change whether it kept up, and the tail was no better.
 </p>
 
 <div class="tscroll">
@@ -514,37 +528,28 @@
   <thead><tr><th>Other figures</th><th>Value</th></tr></thead>
   <tbody>
     <tr><td class="n">Sustained command rate (gateway / replica)</td><td>
-      <strong>500,000 orders/s for 4&nbsp;s</strong> (2.0 million orders), in three runs out of three, with identical books on both replicas, no leader change, no sequence gap and no egress event lost.
-      That needs two settings that the product chooses: a 100&nbsp;µs receiver spin window and the console echo off. With Core's defaults the same stack ingests 1about 335,000 at a target of 500,000..</td></tr>
-    <tr><td class="n">Test hardware</td><td>AMD Ryzen 7 5800X (8 cores, 16 threads), 32&nbsp;GB RAM. Run under WSL2 (WSL 3.0.3, Linux 6.18.54, Ubuntu 22.04) with 16&nbsp;GB. Not bare metal. No core pinning.</td></tr>
-    <tr><td class="n">Topology of the run</td><td>One host. The gateway, both replicas, the performance service and the load generator all ran in the same virtual machine. The multicast groups ran over its own network interface.
+      <strong>500,000 orders/s for 4&nbsp;s</strong> (2.0 million orders), in six runs out of six (three with Core's defaults, three with the product's load settings), with identical books on both replicas, no leader change, no sequence gap and no egress event lost.</td></tr>
+    <tr><td class="n">Test hardware</td><td>AMD Ryzen 7 5800X (8 cores, 16 threads), 32&nbsp;GB RAM, Linux Mint 22.3 (kernel 7.0). The CPU governor was left at <code>powersave</code>, <code>net.core.rmem_max</code> was 4&nbsp;MB, and there was no core pinning.</td></tr>
+    <tr><td class="n">Topology of the run</td><td>One host. The gateway, both replicas, the performance service and the load generator all ran on the same machine, with the multicast groups on the loopback interface inside a network namespace.
       One clock serves every process, so the cross-machine metrics are valid, but they do not measure a network.</td></tr>
-    <tr><td class="n">Build</td><td>Release: <code>-O3 -march=native -mtune=native -Wall -Wextra -pthread</code>. 
-	Every run after the egress rework is Core v0.3.0 (commit f130e75) with EventContractLOB at commit df58d8b. GCC 11.4, CMake 4.4 (Ubuntu 22.04 on WSL2).</td></tr>
+    <tr><td class="n">Build</td><td>Release: <code>-O3 -march=native -mtune=native -Wall -Wextra -pthread</code>.
+	Core v0.4.0 with EventContractLOB at commit 511b8dc. GCC 13.3, CMake 3.28.</td></tr>
   </tbody>
 </table>
 </div>
-<h3>Why the egress rework?</h3>
-<ul>
-  <li><strong>Leadership under load (fixed by the egress rework).</strong> Before the rework the leader changed 47 to 84 times in every run from 100,000 to 500,000 orders/s.
-      The cause was the leader's publisher, which sent each event as its own datagram. That many system calls could not keep up, so the event queue (16,384 slots) filled and the leader's matching thread blocked on it.
-      The leader then fell lagged too heavily which the arbiter noticed and set a new leader. The old leader caught up, and the cycle repeated about every quarter of a second. 
-      Widening the arbiter's windows to 100 and 200&nbsp;ms did not stop it, because the lag was real. And after the rework the inbound queues, which had filled behind the blocked matching thread, no longer fill.
-      Now a datagram carries every event that is waiting. At 100,000 orders/s the publisher sent 233,827 datagrams for 2,959,738 events (13 events each on average), and the leader changed in 1 run of 21 with a failover time of 10.7ms.</li>
-  <li><strong>Waking sleeping replicas.</strong> The gateway's ingress thread was at 90% and 93% of a core, the busiest thread in its process with 91% of its time in the kernel and churning through only 323,000 orders/s with default settings.
-      Receivers that spin for 100&nbsp;µs achieved 500,000 orders/s in seven runs out of seven.</li>
-</ul>
 <h3>Performance Service Output</h3>
 <p>
   Shown is Replica 1, the 30th one-second window of the 60-second run at 50,000 orders/s. Values are nanoseconds, except the depth and the product counters.
 </p>
-<pre class="code">[perf] replica=1 metric=engine_exec_ns n=50211 min=40 max=31855 p50=80 p99=360 p99.99=9351
-[perf] replica=1 metric=network_delay_ns n=50211 min=27312 max=997887 p50=133503 p99=352255 p99.99=996351
-[perf] replica=1 metric=queuing_delay_ns n=50235 min=65 max=109055 p50=1081 p99=9375 p99.99=107647
-[perf] replica=1 metric=inbound_q_depth n=50248 min=0 max=42 p50=5 p99=15 p99.99=37
-[perf] replica=1 metric=inbound_q_submit_cycles n=50248 min=38 max=20447 p50=76 p99=304 p99.99=14751
-[perf] replica=1 metric=ext_counter_0 n=50237 min=0 max=13 p50=0 p99=6 p99.99=11
-[perf] replica=1 metric=ext_counter_1 n=50237 min=0 max=18 p50=0 p99=9 p99.99=16</pre>
+<pre class="code">[perf] replica=1 metric=engine_exec_ns n=24823 min=20 max=4041 p50=60 p99=220 p99.99=740
+[perf] replica=1 metric=network_delay_ns n=49975 min=11488 max=1153023 p50=24287 p99=48927 p99.99=1153023
+[perf] replica=1 metric=queuing_delay_ns n=49987 min=40 max=4823 p50=420 p99=1700 p99.99=4803
+[perf] replica=1 metric=inbound_q_depth n=50022 min=0 max=24 p50=4 p99=11 p99.99=19
+[perf] replica=1 metric=inbound_q_submit_cycles n=50022 min=38 max=14103 p50=114 p99=304 p99.99=418
+[perf] replica=1 metric=ext_counter_0 n=50028 min=0 max=12 p50=0 p99=6 p99.99=10
+[perf] replica=1 metric=ext_counter_1 n=50028 min=0 max=19 p50=0 p99=9 p99.99=17
+[perf] replica=1 metric=ext_counter_2 n=50028 min=0 max=0 p50=0 p99=0 p99.99=0
+[perf] replica=1 metric=ext_counter_3 n=50028 min=0 max=0 p50=0 p99=0 p99.99=0</pre>
 
 <!-- =====================================================================
      LIMITS
@@ -561,19 +566,19 @@
 <div class="note limit"><b class="tag">ELECTION MODEL</b>
   Leadership is decided by a central arbiter with a fencing token, not by a consensus protocol among the replicas. The arbiter recomputes only when a heartbeat arrives.</div>
 <div class="note limit"><b class="tag">EGRESS GATEWAY CAPACITY</b>
-  One thread receives, encodes and delivers every event. Tuned, the thread used about half a core at 500,000 orders/s and lost no messages but can be overwhelmed if flow increases. </div>
+  One thread receives, encodes and delivers every event. Tuned, the thread used about a third of a core at 500,000 orders/s and lost no messages, but it can be overwhelmed if flow increases.</div>
 <div class="note limit"><b class="tag">IDLE COST</b>
   Three threads per replica spin at 100% whether or not any traffic arrives, so two replicas keep about six cores busy at idle. That is the price of the busy-polling design, and it is not tuned or pinned.</div>
 <div class="note limit"><b class="tag">TRACE ARENA</b>
   The arena has 2<sup>20</sup> slots. A command that rests long enough for the ring to wrap loses its timing record; a collision counter makes that visible but can't prevent it.</div>
 <div class="note limit"><b class="tag">SCOPE</b>
-  One engine per replica process. Every measurement on this page comes from one machine under WSL2, with every process on the same host.</div>
+  One engine per replica process. Every measurement on this page comes from one machine with every process on the same host.</div>
 
 <!-- =====================================================================
      BUILD
      ===================================================================== -->
 <h2 id="build">BUILD AND TEST</h2>
-<p>Linux only (it uses <code>epoll</code>, <code>mmap</code>, multicast sockets and <code>CLOCK_TAI</code> directly); on Windows, build under WSL. On its own this repository builds Core and the aggregator; to run a whole exchange you need a product on top —
+<p>Linux on x86-64 only (it uses <code>epoll</code>, <code>mmap</code>, multicast sockets and a calibrated TSC clock that falls back to <code>CLOCK_TAI</code>); on Windows, build under WSL. On its own this repository builds Core and the aggregator; to run a whole exchange you need a product on top —
   <a href="#" data-project="EVENT CONTRACT LOB">EventContractLOB</a> has the launch scripts, and <a href="#" data-project="BATCH GPU">BatchGPU</a> lists the commands to start each program.</p>
 <pre class="code">cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"

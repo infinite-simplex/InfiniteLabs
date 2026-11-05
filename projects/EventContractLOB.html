@@ -56,8 +56,8 @@
   <li><strong>Order type.</strong> Real OUCH has no order-type byte, so the type is recovered from <code>timeInForce</code>: <code>0</code> means immediate-or-cancel, <code>99998</code> ("market hours") means good-till-day, anything else is a plain limit order.
       That makes only three types reachable over the wire — limit, IOC and good-till-day. Fill-or-kill, market and good-till-cancel exist in the engine and are covered by book-level tests.</li>
   <li><strong>Firm.</strong> The 4-character market-participant code is packed into an integer for self-trade prevention.</li>
-  <li><strong>Tokens.</strong> Each order token maps to an order id for cancel and replace lookups. A cancel for an unknown token is accepted and does nothing. 
-  A replace is implemented as a cancel then limit order.</li>
+  <li><strong>Tokens.</strong> Each order token maps to an order id for cancel and replace lookups. A cancel for an unknown token is accepted and does nothing.
+  A replace is implemented as a cancel then limit order. The 48 MiB lookup table sits on 2 MiB pages, and the handler prefetches the slots of the next eight frames while it parses the current one (<a href="#tokens">measured below</a>).</li>
 </ul>
 
 <h3>Egress</h3>
@@ -172,7 +172,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
     <h4>Intrusive FIFO list per price level</h4>
     <p>Orders link to each other by pool index (<code>prev</code>/<code>next</code>), with a head and tail per level.</p>
     <p class="buys"><span class="lbl">BUYS</span> O(1) append, O(1) removal from the middle, and price-time priority for free.</p>
-    <p class="costs"><span class="lbl">COSTS</span> Walking a deep level chases links through memory. Measured: a trade costs about 38 ns per order at any depth while a level's orders sit together in the pool, but about 45 ns at 10,000 and at 100,000 deep when they are scattered across the pool (RESULTS).</p>
+    <p class="costs"><span class="lbl">COSTS</span> Walking a deep level chases links through memory. Measured: a trade costs about 15 ns per order at any depth while a level's orders sit together in the pool, and about 17 ns at 10,000 and at 100,000 deep when they are scattered across the pool (RESULTS).</p>
     <p class="where">PriceLevel · Order::m_prev_idx / m_next_idx</p>
   </div>
 
@@ -196,7 +196,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
     <h4>Two counters per order</h4>
     <p>As the book walks price levels it counts the levels touched and the resting orders visited. They reach the aggregator as <code>ExtCounter0</code> and <code>ExtCounter1</code>.</p>
     <p class="buys"><span class="lbl">BUYS</span> Visibility into how much matching work each order caused, alongside how long it took.</p>
-    <p class="costs"><span class="lbl">COSTS</span> Two increments inside the matching loop. Measured, they cost nothing visible: 38.00 against 38.00 ns per order with and without them.</p>
+    <p class="costs"><span class="lbl">COSTS</span> Two increments inside the matching loop. Measured with and without them: 0.05 ns per order in a sweep (15.45 against 15.40 ns), and 3.5 ns for a single order against a 1,000-deep level (19.7 against 16.2 ns).</p>
     <p class="where">LobExtSlot · walk_price_level</p>
   </div>
 
@@ -241,8 +241,8 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
      ===================================================================== -->
 <h2 id="results">RESULTS</h2>
 <p>
-  <strong>One machine:</strong> AMD Ryzen 7 5800X (8 cores, 16 threads), bare metal, Linux Mint 22.3 (kernel 6.14), GCC 13.3 at <code>-O3 -march=native</code>, Core v0.3.0.
-  The CPU governor was left at <code>powersave</code> (the cores ran at about 4.6 GHz under load) and <code>net.core.rmem_max</code> was raised to 4 MB, as the build notes advise. A desktop session was open and nothing else of note was running.
+  <strong>One machine:</strong> AMD Ryzen 7 5800X (8 cores, 16 threads), bare metal, Linux Mint 22.3 (kernel 7.0.0-38), GCC 13.3 at <code>-O3 -march=native</code>, Core v0.4.0.
+  The CPU governor was left at <code>powersave</code> (a pinned benchmark thread ran at about 4.8 GHz, the busy gateway at about 4.1 GHz with the whole stack running) and <code>net.core.rmem_max</code> was raised to 4 MB, as the build notes advise. A desktop session was open and nothing else of note was running.
   The gateway, two replicas, performance service and load generator all share one host, with no CPU pinning. Core's multicast sockets follow the default route, which on this machine is the Wi-Fi card, so the load tests ran inside an unprivileged network namespace (<code>unshare -Urn</code>, with multicast enabled on its loopback) to keep every datagram on loopback.
   "Tuned" indicates changes to Core's default parameters to make the LOB faster.
 </p>
@@ -256,7 +256,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
 <table class="spec">
   <thead><tr><th>Metric</th><th>p50</th><th>p99</th><th>p99.99</th><th>max</th></tr></thead>
   <tbody>
-    <tr><td class="n">EngineExecutionNs</td><td>70 ns</td><td>260 ns (260–280)</td><td>590 ns (575–650)</td><td>4.9 µs (4.8–99 µs)</td></tr>
+    <tr><td class="n">EngineExecutionNs</td><td>70 ns</td><td>210 ns (204–240)</td><td>500 ns (495–540)</td><td>4.3 µs (4.2–9.2 µs)</td></tr>
     <tr><td class="n">ExtCounter0 (price levels touched)</td><td>0</td><td>5</td><td>7</td><td>10</td></tr>
     <tr><td class="n">ExtCounter1 (resting orders touched)</td><td>0</td><td>7</td><td>11</td><td>14</td></tr>
   </tbody>
@@ -272,16 +272,16 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
 <table class="spec">
   <thead><tr><th>Target orders/s · length</th><th>Defaults: reached</th><th>engine p50 / p99 in ns</th><th>Tuned: reached</th><th>engine p50 / p99 in ns</th></tr></thead>
   <tbody>
-    <tr><td class="n">10,000 · 30 s</td><td>10,000</td><td>70 / 260–280</td><td>10,000</td><td>70 / 250–260</td></tr>
-    <tr><td class="n">50,000 · 30 s</td><td>49,998</td><td>70 / 230–245</td><td>49,998</td><td>70 / 240</td></tr>
-    <tr><td class="n">100,000 · 20 s</td><td>99,995</td><td>70 / 230–240</td><td>99,995</td><td>70 / 230–235</td></tr>
-    <tr><td class="n">200,000 · 10 s</td><td>199,978</td><td>70 / 225–230</td><td>199,978</td><td>70 / 210–235</td></tr>
-    <tr><td class="n">500,000 · 4 s</td><td>499,856–499,860</td><td>70–75 / 200–225</td><td>499,856–499,859</td><td>70 / 210–225</td></tr>
+    <tr><td class="n">10,000 · 30 s</td><td>10,000</td><td>69–70 / 204–240</td><td>10,000</td><td>70 / 210–220</td></tr>
+    <tr><td class="n">50,000 · 30 s</td><td>49,998</td><td>60–69 / 190–200</td><td>49,998</td><td>60 / 170–200</td></tr>
+    <tr><td class="n">100,000 · 20 s</td><td>99,995</td><td>60–69 / 190–200</td><td>99,995</td><td>60–70 / 180–195</td></tr>
+    <tr><td class="n">200,000 · 10 s</td><td>199,978</td><td>60–69 / 180–210</td><td>199,978</td><td>60–64 / 160–175</td></tr>
+    <tr><td class="n">500,000 · 4 s</td><td>499,856–499,859</td><td>60–65 / 180–195</td><td>499,855–499,856</td><td>65 / 170–205</td></tr>
   </tbody>
 </table>
 </div>
 <p>
-  In all 30 runs the leader never changed, no sequence gap needed repair, no egress event was lost and both replicas ended with identical books. Core's defaults and the tuned settings both took the 500,000 target, in 4-second runs. The two differ little in the engine's median and p99, and the median is 70 ns in both at 10,000 a second; at 500,000 a second the tuned runs show the higher p99.99 (1.8 to 3.2 µs against 0.5 to 2.0 µs).
+  In all 30 runs no sequence gap needed repair, no egress event was lost and both replicas ended with identical books; the leader held for the whole load in every run (in one tuned 50,000 run the second replica took over only at shutdown, as the script stopped the replicas one after the other). Core's defaults and the tuned settings both took the 500,000 target, in 4-second runs. The two differ little: the median is 70 ns in both at 10,000 a second, and at 500,000 a second p99.99 is 465–505 ns under the defaults and 450–545 ns tuned.
 </p>
 
 <h3>One level, in process</h3>
@@ -292,35 +292,53 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
 <table class="spec">
   <thead><tr><th>Level depth</th><th>sweep, together</th><th>sweep, scattered</th><th>single, together</th><th>single, scattered</th></tr></thead>
   <tbody>
-    <tr><td class="n">100</td><td>37.9</td><td>37.9</td><td>40.5</td><td>40.5</td></tr>
-    <tr><td class="n">1,000</td><td>38.0</td><td>38.0</td><td>40.5</td><td>40.7</td></tr>
-    <tr><td class="n">10,000</td><td>38.0</td><td>44.6</td><td>40.9</td><td>46.7</td></tr>
-    <tr><td class="n">100,000</td><td>38.2</td><td>45.1</td><td>40.7</td><td>50.6</td></tr>
+    <tr><td class="n">100</td><td>15.3</td><td>15.4</td><td>19.7</td><td>19.8</td></tr>
+    <tr><td class="n">1,000</td><td>15.4</td><td>15.5</td><td>19.7</td><td>19.9</td></tr>
+    <tr><td class="n">10,000</td><td>15.4</td><td>16.6</td><td>19.8</td><td>21.2</td></tr>
+    <tr><td class="n">100,000</td><td>15.5</td><td>16.8</td><td>19.8</td><td>21.5</td></tr>
   </tbody>
 </table>
 </div>
 <p>
-  Depth does not matter while a level's orders sit together; scattered, the cost rises once a level outgrows the cache, to about 45 ns for a sweep at 10,000 and 100,000 deep (44.5–45.4 ns across the seven runs) and to 47–51 ns for single orders (the 100,000-deep case ranged 49.8–57.3 ns). Every fill emits two events and stamps each with a clock read, and those reads are most of the 38 ns: in a scratch build with the clock replaced by a counter (two runs), the same sequential sweeps cost 4 to 5 ns an order and the single-share trades 9 to 11 ns.
+  Depth does not matter while a level's orders sit together; scattered, the cost rises once a level outgrows the cache, but only to 16.6–16.8 ns for a sweep at 10,000 and 100,000 deep and to 21.2–21.5 ns for single orders (across the seven runs, 16.5–16.8 and 21.1–22.0 ns). Every fill emits two events and stamps each with a clock read, and those reads are most of the 15 ns: in a scratch build with the clock replaced by a counter (seven runs), the same sequential sweeps cost 4.2 ns an order and the single-share trades 9.9 ns. The same scratch build shows what a scattered level really costs in cache misses, 15 ns for a sweep at 10,000 deep; with the real clock that cost mostly disappears behind the clock reads, which the misses appear to overlap.
 </p>
 
 <h3>Sustained, in process</h3>
 <p>
-  <code>EngineThroughput</code> replays a generated stream through the real book for 30 seconds per row, with no gateway or sockets. The stream is about 44% passive limit orders, 8% marketable, 7% IOC, 30% cancels and 10% replaces (rounded shares of the commands); every cancel and replace names a resting order, and the book is held at the depth shown. Each cycle must emit the predicted number of events and end with an empty book. Threads are pinned, and the three 50,000-deep runs span 13.8 to 14.4 M orders a second.
+  <code>EngineThroughput</code> replays a generated stream through the real book for 30 seconds per row, with no gateway or sockets. The stream is about 44% passive limit orders, 8% marketable, 7% IOC, 30% cancels and 10% replaces (rounded shares of the commands); every cancel and replace names a resting order, and the book is held at the depth shown. Each cycle must emit the predicted number of events and end with an empty book. Threads are pinned, and the three 50,000-deep runs span 17.7 to 18.2 M orders a second.
 </p>
 <div class="tscroll">
 <table class="spec">
   <thead><tr><th>What runs</th><th>Resting orders</th><th>Orders per second</th><th>Per order</th></tr></thead>
   <tbody>
-    <tr><td>The book alone, events discarded</td><td class="n">1,000</td><td class="n">19.2 M</td><td class="n">52 ns</td></tr>
-    <tr><td>The book alone, events discarded</td><td class="n">50,000</td><td class="n">14.2 M</td><td class="n">70 ns</td></tr>
-    <tr><td>The book alone, events discarded</td><td class="n">200,000</td><td class="n">11.8 M</td><td class="n">85 ns</td></tr>
-    <tr><td>With the real event and trace queues, drained by a second thread</td><td class="n">50,000</td><td class="n">6.3 M</td><td class="n">159 ns</td></tr>
-    <tr><td>Through Core's <code>MatchingService</code>, fed by a producer thread</td><td class="n">50,000</td><td class="n">4.2 M</td><td class="n">236 ns</td></tr>
+    <tr><td>The book alone, events discarded</td><td class="n">1,000</td><td class="n">29.1 M</td><td class="n">34 ns</td></tr>
+    <tr><td>The book alone, events discarded</td><td class="n">50,000</td><td class="n">17.9 M</td><td class="n">56 ns</td></tr>
+    <tr><td>The book alone, events discarded</td><td class="n">200,000</td><td class="n">15.3 M</td><td class="n">65 ns</td></tr>
+    <tr><td>With the real event and trace queues, drained by a second thread</td><td class="n">50,000</td><td class="n">7.8 M</td><td class="n">128 ns</td></tr>
+    <tr><td>Through Core's <code>MatchingService</code>, fed by a producer thread</td><td class="n">50,000</td><td class="n">6.3 M</td><td class="n">159 ns</td></tr>
   </tbody>
 </table>
 </div>
 <p>
-  A clock read costs about 20 ns here and a command emits about 1.5 events. With the clock replaced by a counter in a scratch build, the 1,000-deep row goes from 19.2 M to 34.6 M orders a second, so about 23 ns of every order is timestamping. The queues more than halve the rate, since each event is copied to a second core. Even the slowest row is more than eight times the 500,000 orders a second asked of the whole exchange; the pipeline around the engine is what limits it, not the matching.
+  A command emits about 1.5 events and each is stamped with a clock read. With the clock replaced by a counter in a scratch build, the 1,000-deep row goes from 29.1 M to 36.9 M orders a second (two runs: 37.1 and 36.7), so about 7 ns of every order is timestamping. The queues more than halve the rate, since each event is copied to a second core. Even the slowest row is more than twelve times the 500,000 orders a second asked of the whole exchange; the pipeline around the engine is what limits it, not the matching.
+</p>
+
+<h3 id="tokens">Token table, per order</h3>
+<p>
+  The 48 MiB token table sits on 2 MiB pages, and the handler prefetches the slots of the next eight frames in the read buffer while it parses the current one. The whole gateway under <code>perf stat</code> at 300,000 orders a second for 6 seconds with the tuned settings; builds with and without the two changes, alternated, five runs each (range in brackets).
+</p>
+<div class="tscroll">
+<table class="spec">
+  <thead><tr><th>Per order, whole gateway</th><th>Without</th><th>With</th></tr></thead>
+  <tbody>
+    <tr><td>Cycles</td><td class="n">6,264 (6,071–6,468)</td><td class="n">5,538 (5,375–5,749)</td></tr>
+    <tr><td>Fills from main memory</td><td class="n">1.49 (1.45–1.52)</td><td class="n">0.53 (0.51–0.56)</td></tr>
+    <tr><td>Page-table walks</td><td class="n">1.19 (1.16–1.22)</td><td class="n">0.18 (0.16–0.19)</td></tr>
+  </tbody>
+</table>
+</div>
+<p>
+  Cycles per order fell 11.6%, and the ranges do not overlap. A differential test checks that the look-ahead changes no parse result.
 </p>
 
 <!-- =====================================================================
@@ -338,13 +356,13 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
 <div class="note limit"><b class="tag">EGRESS FORMAT</b>
   The public feed is a custom compact frame, not ITCH, and the <code>DELETED</code> event type is declared but never emitted (a full cancel reports <code>CANCELED</code> with nothing left).</div>
 <div class="note limit"><b class="tag">MEASUREMENTS</b>
-  Everything was measured on one bare-metal machine with the datagrams on loopback (inside a network namespace, see the results), without CPU pinning, so p99.99 and max include the operating system's scheduling noise. On Core v0.3.0, with a desktop session open, the stack took every rate from 10,000 to 500,000 orders a second, under Core's defaults and tuned, with no leader change, no sequence gap and no lost egress event, and both replicas ended with identical books (<code>Tools/load_test.sh</code> compares a digest of each replica's whole book and reports the gateway's egress counters). The 500,000 target was run for 4 seconds. Nothing is claimed beyond that. The engine is not the limit: on its own it sustains 4.2 to 19 million orders a second. A 70-second run at 50,000 a second (3.5 million orders) filled the order-token table and kept its rate afterwards, rejecting the excess.</div>
+  Everything was measured on one bare-metal machine with the datagrams on loopback (inside a network namespace, see the results), without CPU pinning, so p99.99 and max include the operating system's scheduling noise. On Core v0.4.0, with a desktop session open, the stack took every rate from 10,000 to 500,000 orders a second, under Core's defaults and tuned, with no leader change during the load, no sequence gap and no lost egress event, and both replicas ended with identical books (<code>Tools/load_test.sh</code> compares a digest of each replica's whole book and reports the gateway's egress counters). The 500,000 target was run for 4 seconds. Nothing is claimed beyond that. The engine is not the limit: on its own it sustains 6.3 to 29 million orders a second. A 70-second run at 50,000 a second (3.5 million orders) filled the order-token table and kept its rate afterwards, rejecting the excess.</div>
 
 <!-- =====================================================================
      REPRODUCE
      ===================================================================== -->
 <h2 id="reproduce">BUILD AND RUN</h2>
-<p>Linux only (it uses <code>epoll</code>, <code>mmap</code>, multicast sockets and <code>CLOCK_TAI</code> directly); on Windows, build under WSL. The build fetches Core from GitHub, pinned to a release tag.</p>
+<p>Linux only (it uses <code>epoll</code>, <code>mmap</code>, multicast sockets and a TSC-based clock that falls back to <code>CLOCK_TAI</code>); on Windows, build under WSL. The build fetches Core from GitHub, pinned to a release tag.</p>
 <pre class="code">cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure

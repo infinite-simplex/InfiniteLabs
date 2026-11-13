@@ -69,17 +69,6 @@ const projectsData = {
             links: {
                 github: "https://github.com/infinite-simplex/PokeWatt"
             }
-        },
-        {
-            segmentId: "SEGMENT 01984",
-            title: "PROJECT TRIHARD",
-            status: "NOMINAL",
-            technologies: "TYPESCRIPT NEXT.JS",
-            htmlFile: "project_three.html",
-            links: {
-                github: "https://github.com/yourusername/project-three",
-                youtube: "https://youtube.com/channel/your-channel"
-            }
         }
     ]
 };

@@ -1,4 +1,4 @@
-// Shared runtime for the retro explainer pages (EventContractLOB, ToyExchangeCore).
+// Shared runtime for the retro explainer pages (EventContractLOB, DisruptorExchangeCore).
 // createRuntime(root) returns the drawing/animation helpers scoped to one mounted project,
 // plus unmount(), which stops every animation loop. Animation loops are async and never
 // finish on their own, so unmount() flips `alive`, releases anything waiting, and each loop

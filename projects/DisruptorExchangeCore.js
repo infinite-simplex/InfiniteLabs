@@ -1,4 +1,4 @@
-// Behavior for the ToyExchange Core explainer. Loaded by script.js via import(); mount(root) wires up the
+// Behavior for the DisruptorExchange Core explainer. Loaded by script.js via import(); mount(root) wires up the
 // figures inside root and returns unmount(), which script.js calls when the panel is replaced.
 import { createRuntime } from './shared/explainer.js';
 

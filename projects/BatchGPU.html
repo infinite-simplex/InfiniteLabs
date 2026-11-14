@@ -1,6 +1,6 @@
 <!-- BatchGPU explainer — a fragment loaded into the project panel by script.js.
      Behavior: BatchGPU.js (mount/unmount). Styles: shared/explainer.css, plus the few rules in the style block below.
-     The pipeline itself (sequencing, replication, failover, telemetry) is the ToyExchange Core project. -->
+     The pipeline itself (sequencing, replication, failover, telemetry) is the DisruptorExchange Core project. -->
 <style>
 @scope (.explainer) {
   .btn.on { background: rgba(72, 208, 75, .38); color: #fff; box-shadow: inset 0 0 0 1px var(--NEON_GREEN); }
@@ -32,10 +32,10 @@
     <div class="kv"><span class="k">SUBTITLE:</span> <span class="v">An hourly batch auction for GPU compute, where one bid can accept many models, regions and hours, cleared to one price per item by integer network simplex</span></div>
     <div class="kv"><span class="k">STATUS:</span> <span class="v">COMPLETE — built, tested and measured</span></div>
     <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.10.16</span></div>
-    <div class="kv"><span class="k">STACK:</span> <span class="v">C++20 · min-cost flow by network simplex · built on ToyExchange Core v0.3.0 · SQLite (WAL) · googletest</span></div>
+    <div class="kv"><span class="k">STACK:</span> <span class="v">C++20 · min-cost flow by network simplex · built on DisruptorExchange Core v0.1.0 · SQLite (WAL) · googletest</span></div>
     <div class="kv"><span class="k">SOURCE:</span>
       <a href="https://github.com/infinite-simplex/BatchGPU" target="_blank">→ BatchGPU</a> &nbsp;
-      <a href="#" data-project="TOY EXCHANGE CORE">→ ToyExchange Core, which it runs on (project)</a>
+      <a href="#" data-project="DISRUPTOR EXCHANGE CORE">→ DisruptorExchange Core, which it runs on (project)</a>
     </div>
     <div class="kv"><span class="k">JUMP TO:</span> <a href="#overview">overview</a> · <a href="#market">market</a> · <a href="#cycle">cycle</a> · <a href="#clear">clear</a> · <a href="#solver">solver</a> · <a href="#choices">choices</a> · <a href="#design">design</a> · <a href="#records">records</a> · <a href="#telemetry">telemetry</a> · <a href="#results">results</a> · <a href="#limits">limits</a> · <a href="#build">build</a></div>
   </div>
@@ -57,7 +57,7 @@
   Batches suit flexible bids: separate order books per model, region and hour would split a thin market into many thinner ones, and at an hourly period nobody races for the front of a queue. This is a call auction (orders gathered, then cleared together) with substitution.
 </p>
 <p>
-  Networking, replication and failover come from <a href="#" data-project="TOY EXCHANGE CORE">ToyExchange Core</a>, which <a href="#" data-project="EVENT CONTRACT LOB">EventContractLOB</a> also runs on. Core's gateway takes in clients' commands, numbers each into one sequenced log and multicasts it to replicas that each run the engine of the exchange built on Core (a “product”), so all of them must reach the same result from the same log. BatchGPU is such a product: it supplies the engine, a clearing module, a batch clock, a recorder and a read-only results API.
+  Networking, replication and failover come from <a href="#" data-project="DISRUPTOR EXCHANGE CORE">DisruptorExchange Core</a>, which <a href="#" data-project="EVENT CONTRACT LOB">EventContractLOB</a> also runs on. Core's gateway takes in clients' commands, numbers each into one sequenced log and multicasts it to replicas that each run the engine of the exchange built on Core (a “product”), so all of them must reach the same result from the same log. BatchGPU is such a product: it supplies the engine, a clearing module, a batch clock, a recorder and a read-only results API.
 </p>
 
 <figure class="fig" id="figTopo">
@@ -513,7 +513,7 @@ sink   ──▶ source the return arc, closing the loop: each unit through it e
 <h2 id="telemetry">MEASURING IT</h2>
 
 <p>
-  Core gives every command a 64-byte trace with four timestamps and four opaque counters, and forwards each finished trace to a performance service over UDP (see the <a href="#" data-project="TOY EXCHANGE CORE">Core page</a>).
+  Core gives every command a 64-byte trace with four timestamps and four opaque counters, and forwards each finished trace to a performance service over UDP (see the <a href="#" data-project="DISRUPTOR EXCHANGE CORE">Core page</a>).
   BatchGPU domain specific telemetry: lifted units, bids filled, bids unfilled and solver pivots, on the clear's trace.
 </p>
 
@@ -540,7 +540,7 @@ sink   ──▶ source the return arc, closing the loop: each unit through it e
      ===================================================================== -->
 <h2 id="results">RESULTS</h2>
 <p>
-  Clear times are measured, and so is the whole exchange with Core's performance service listening: ten runs on Core v0.3.0, five on its defaults and five on its load settings, on one machine. Every batch is synthetic, on one machine and one compiler. “5 offered, 20 accepted” means each ask offers 5 items and each bid accepts 20.
+  Clear times are measured, and so is the whole exchange with Core's performance service listening: ten runs on Core commit dae895b, five on its defaults and five on its load settings, on one machine. Every batch is synthetic, on one machine and one compiler. “5 offered, 20 accepted” means each ask offers 5 items and each bid accepts 20.
 </p>
 
 <div class="tscroll">
@@ -560,7 +560,7 @@ sink   ──▶ source the return arc, closing the loop: each unit through it e
   <thead><tr><th>Other figures</th><th>Value</th></tr></thead>
   <tbody>
     <tr><td class="n">Memory</td><td>a clear at the arc limit adds about 100 MB at its peak, and the process is about 110 MB with the order book</td></tr>
-    <tr><td class="n">Live telemetry window</td><td>one window of the whole exchange under a full batch, below. Over ten runs on Core v0.3.0 the clear took 0.49 to 0.57 s on a replica (10,000 bids, the cap), on the defaults and on the load settings alike</td></tr>
+    <tr><td class="n">Live telemetry window</td><td>one window of the whole exchange under a full batch, below. Over ten runs on Core commit dae895b the clear took 0.49 to 0.57 s on a replica (10,000 bids, the cap), on the defaults and on the load settings alike</td></tr>
     <tr><td class="n">When a clear is too slow</td><td><strong>Look</strong> when a clear takes over 1 s, or a window shows the clear's counters but no engine time for it: Core's histogram stops at about 1.07 s and drops what is longer, uncounted. <strong>Act</strong> when it needs over 1,000,000 pivots, a quarter of the budget and the most Core's counter can show; the run above needed 198,387. A clear holds the queue behind it, so the orders that arrive during it wait about as long as the clear does, and the same 1 s covers the queuing delay. The replica's inbound queue holds 1,024 commands. Every run filled it behind the clear and lost no order, because the 4 MiB socket buffer behind it holds the rest, so a full queue is routine there: <strong>look</strong> when it stays full for over 1 s. These are chosen from ten runs on one machine, not tuned.</td></tr>
     <tr><td class="n">Test machine</td><td>AMD Ryzen 7 5800X, Ubuntu 22.04 on WSL2, GCC 11.4, <code>-O3 -march=native</code>; one thread per solve</td></tr>
   </tbody>
@@ -570,7 +570,7 @@ sink   ──▶ source the return arc, closing the loop: each unit through it e
 <h3>One telemetry window: the clear</h3>
 <p>
   The load: 10,000 bids from 500 buyers and 7,500 asks (each ask offers 5 items, each bid accepts 20; synthetic, <code>Bench/gen_load.py</code>, 272,281 arcs; not the ERCOT-calibrated batch of the table above, so its clear time is not comparable with that row), sent by one client over TCP to the gateway, then a <code>BATCH_CLEAR</code>, then 2,500 more orders straight behind it. The gateway, two replicas, two recorders and the performance service ran on one machine, so four engines solved the same batch at once. <code>Bench/telemetry_run.sh</code> reproduces it.
-  This is the one-second window that holds the clear, as replica 1 reported it in the first of five runs on Core v0.3.0's defaults (the clear took 517 ms; the five took 494 to 537 ms). Times are nanoseconds.
+  This is the one-second window that holds the clear, as replica 1 reported it in the first of five runs on the defaults of Core commit dae895b (the clear took 517 ms; the five took 494 to 537 ms). Times are nanoseconds.
 </p>
 <pre class="code">[perf] replica=1 metric=engine_exec_ns           n=2501 min=180   max=517210111 p50=330       p99=880
 [perf] replica=1 metric=network_delay_ns         n=2501 min=73024 max=502530047 p50=496238591 p99=502530047
@@ -611,7 +611,7 @@ sink   ──▶ source the return arc, closing the loop: each unit through it e
      LIMITS
      ===================================================================== -->
 <h2 id="limits">KNOWN LIMITS</h2>
-<p>Things a careful reader would find, stated up front. The pipeline's own limits are on the <a href="#" data-project="TOY EXCHANGE CORE">Core page</a>.</p>
+<p>Things a careful reader would find, stated up front. The pipeline's own limits are on the <a href="#" data-project="DISRUPTOR EXCHANGE CORE">Core page</a>.</p>
 
 <div class="note limit"><b class="tag">NO AUTHENTICATION</b>
   The gateway trusts the participant id an order claims, and accepts a <code>BATCH_CLEAR</code> with any batch id from any connection. The results API listens on 127.0.0.1, and its open-orders route is off unless started with <code>--open-orders</code>.</div>
@@ -620,7 +620,7 @@ sink   ──▶ source the return arc, closing the loop: each unit through it e
 <div class="note limit"><b class="tag">REPORTING IS BEST EFFORT</b>
   Replica-to-gateway UDP has no gap-fill, so a client can miss some of a large clear's results. Across ten runs of a clear that emits about 78,000 events, one client received every event in three and only part in seven; it always had the first 17,500 acknowledgements. The gateway's own counters showed no event missing from the replicas and no client output dropped, yet it had delivered only 29,560 to 74,278 of the events, so Core's statistics do not show this loss. It is not the gateway's 1 MiB limit on a client's unsent output: 16 MiB changed nothing in three runs. The cause is not known. Every result is in the recorders' files and the API, which is where a client asks for one it missed. Telemetry is UDP too, and its histograms stop at about 1.07 s and 1,000,000: a longer clear or a larger count is dropped, uncounted.</div>
 <div class="note limit"><b class="tag">ORDERS BEHIND A CLEAR WAIT FOR IT</b>
-  A replica's inbound queue holds 1,024 commands, and the clear holds it for as long as it runs. Orders sent right behind a clear fill the queue, and the receiver stops reading until the clear ends, so they wait in its socket buffer: with Core v0.3.0's 4 MiB buffer they fit, and in all ten runs every order was recorded and the two recorders wrote identical digests. The median order reached the engine 0.44 to 0.51 s after the gateway took it. The kernel still dropped 75 to 1,988 UDP datagrams during those runs, counted for the whole machine, and a receiver fetches what it missed from the gateway after 200 ms without a datagram. No run has sent a clear while a burst was still being recovered.</div>
+  A replica's inbound queue holds 1,024 commands, and the clear holds it for as long as it runs. Orders sent right behind a clear fill the queue, and the receiver stops reading until the clear ends, so they wait in its socket buffer: with Core's 4 MiB buffer (commit dae895b) they fit, and in all ten runs every order was recorded and the two recorders wrote identical digests. The median order reached the engine 0.44 to 0.51 s after the gateway took it. The kernel still dropped 75 to 1,988 UDP datagrams during those runs, counted for the whole machine, and a receiver fetches what it missed from the gateway after 200 ms without a datagram. No run has sent a clear while a burst was still being recovered.</div>
 <div class="note limit"><b class="tag">SINGLE GATEWAY</b>
   The ticker, sequencer, retransmit server, arbiter and egress gateway share one process. Matching and recording are replicated; the front door is not.</div>
 <div class="note limit"><b class="tag">A TOY MARKET</b>

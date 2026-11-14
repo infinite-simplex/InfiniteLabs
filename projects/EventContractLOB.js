@@ -18,7 +18,7 @@ const { GREEN, BLUE, YEL, GRAYC, REDC } = R.colors;
     const t = el('text', { x, y, fill, 'font-family': 'VT323', 'font-size': 17 }, nodeLayer);
     t.textContent = s;
   };
-  cap(10, 28, 'TOYEXCHANGE · CORE — generic templates', GREEN);
+  cap(10, 28, 'DISRUPTOREXCHANGE · CORE — generic templates', GREEN);
   cap(10, 340, 'EVENTCONTRACTLOB — product implementations', BLUE);
 
   const core = [

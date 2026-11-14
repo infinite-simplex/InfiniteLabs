@@ -2,12 +2,12 @@
 <header class="hero">
   <div class="box">
     <div class="kv"><span class="k">SUBTITLE:</span> <span class="v">A limit order book for binary-outcome event contracts (prices 0–100), speaking NASDAQ OUCH 4.2</span></div>
-    <div class="kv"><span class="k">STATUS:</span> <span class="v warn">OPERATIONAL (v1.0.0)</span></div>
+    <div class="kv"><span class="k">STATUS:</span> <span class="v warn">OPERATIONAL (v0.1.0)</span></div>
     <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.10.24</span></div>
-    <div class="kv"><span class="k">STACK:</span> <span class="v">C++20 · NASDAQ OUCH 4.2 · built on ToyExchange Core · googletest</span></div>
+    <div class="kv"><span class="k">STACK:</span> <span class="v">C++20 · NASDAQ OUCH 4.2 · built on DisruptorExchange Core · googletest</span></div>
     <div class="kv"><span class="k">SOURCE:</span>
       <a href="https://github.com/infinite-simplex/EventContractLOB" target="_blank">→ EventContractLOB</a> &nbsp;
-      <a href="#" data-project="TOY EXCHANGE CORE">→ the Core it runs on (project)</a>
+      <a href="#" data-project="DISRUPTOR EXCHANGE CORE">→ the Core it runs on (project)</a>
     </div>
     <div class="kv"><span class="k">JUMP TO:</span> <a href="#overview">overview</a> · <a href="#wire">wire</a> · <a href="#matching">matching</a> · <a href="#contract">replication contract</a> · <a href="#performance">book internals</a> · <a href="#results">results</a> · <a href="#tests">tests</a> · <a href="#limits">limits</a> · <a href="#reproduce">reproduce</a></div>
   </div>
@@ -23,7 +23,7 @@
   It is a portfolio project, not a production exchange.
 </p>
 <p>
-  This is a product implementation for <a href="#" data-project="TOY EXCHANGE CORE">ToyExchange Core</a>. 
+  This is a product implementation for <a href="#" data-project="DISRUPTOR EXCHANGE CORE">DisruptorExchange Core</a>. 
   This page covers only those pieces; the sequencing, gap recovery, leader election, fencing and timing machinery are described there.
 </p>
 
@@ -125,7 +125,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
      ===================================================================== -->
 <h2 id="contract">CORE CONTRACTS</h2>
 <p>
-  Replication, gap recovery and failover are Core's job (see the <a href="#" data-project="TOY EXCHANGE CORE">Core project</a>). Core makes some constraints to uphold this:
+  Replication, gap recovery and failover are Core's job (see the <a href="#" data-project="DISRUPTOR EXCHANGE CORE">Core project</a>). Core makes some constraints to uphold this:
 </p>
 <ul>
   <li><strong>Matching is a deterministic function of the command stream.</strong> This allows sequencing and gap recovery.</li>
@@ -241,7 +241,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
      ===================================================================== -->
 <h2 id="results">RESULTS</h2>
 <p>
-  <strong>One machine:</strong> AMD Ryzen 7 5800X (8 cores, 16 threads), bare metal, Linux Mint 22.3 (kernel 7.0.0-38), GCC 13.3 at <code>-O3 -march=native</code>, Core v0.4.0.
+  <strong>One machine:</strong> AMD Ryzen 7 5800X (8 cores, 16 threads), bare metal, Linux Mint 22.3 (kernel 7.0.0-38), GCC 13.3 at <code>-O3 -march=native</code>, Core commit d7edf6b.
   The CPU governor was left at <code>powersave</code> (a pinned benchmark thread ran at about 4.8 GHz, the busy gateway at about 4.1 GHz with the whole stack running) and <code>net.core.rmem_max</code> was raised to 4 MB, as the build notes advise. A desktop session was open and nothing else of note was running.
   The gateway, two replicas, performance service and load generator all share one host, with no CPU pinning. Core's multicast sockets follow the default route, which on this machine is the Wi-Fi card, so the load tests ran inside an unprivileged network namespace (<code>unshare -Urn</code>, with multicast enabled on its loopback) to keep every datagram on loopback.
   "Tuned" indicates changes to Core's default parameters to make the LOB faster.
@@ -345,7 +345,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
      LIMITS
      ===================================================================== -->
 <h2 id="limits">KNOWN LIMITS</h2>
-<p>Product-level limits; the pipeline's are on the <a href="#" data-project="TOY EXCHANGE CORE">Core page</a>.</p>
+<p>Product-level limits; the pipeline's are on the <a href="#" data-project="DISRUPTOR EXCHANGE CORE">Core page</a>.</p>
 
 <div class="note limit"><b class="tag">CAPACITY CEILINGS</b>
   Each book side holds at most 262,144 resting orders; past that, the part of an order that would rest is rejected with <code>BOOK_FULL</code> and any fills it already made stand. Order ids come from one counter that is never reset, and the book's lookup table has 10,000,000 slots: once the ids are used up, the gateway and the book reject every enter and replace with <code>ORDER_LIMIT_REACHED</code>. The gateway also keeps each client order token (one per enter and per replace) in a table of 1,835,008 entries, about 2.3 million orders at the load generator's mix. Once it is full, new enters and replaces are rejected with <code>TOKEN_TABLE_FULL</code>, and orders already registered can still be canceled or replaced.</div>
@@ -356,7 +356,7 @@ type: A accepted · J rejected · E executed · C canceled · U replaced · D de
 <div class="note limit"><b class="tag">EGRESS FORMAT</b>
   The public feed is a custom compact frame, not ITCH, and the <code>DELETED</code> event type is declared but never emitted (a full cancel reports <code>CANCELED</code> with nothing left).</div>
 <div class="note limit"><b class="tag">MEASUREMENTS</b>
-  Everything was measured on one bare-metal machine with the datagrams on loopback (inside a network namespace, see the results), without CPU pinning, so p99.99 and max include the operating system's scheduling noise. On Core v0.4.0, with a desktop session open, the stack took every rate from 10,000 to 500,000 orders a second, under Core's defaults and tuned, with no leader change during the load, no sequence gap and no lost egress event, and both replicas ended with identical books (<code>Tools/load_test.sh</code> compares a digest of each replica's whole book and reports the gateway's egress counters). The 500,000 target was run for 4 seconds. Nothing is claimed beyond that. The engine is not the limit: on its own it sustains 6.3 to 29 million orders a second. A 70-second run at 50,000 a second (3.5 million orders) filled the order-token table and kept its rate afterwards, rejecting the excess.</div>
+  Everything was measured on one bare-metal machine with the datagrams on loopback (inside a network namespace, see the results), without CPU pinning, so p99.99 and max include the operating system's scheduling noise. On Core commit d7edf6b, with a desktop session open, the stack took every rate from 10,000 to 500,000 orders a second, under Core's defaults and tuned, with no leader change during the load, no sequence gap and no lost egress event, and both replicas ended with identical books (<code>Tools/load_test.sh</code> compares a digest of each replica's whole book and reports the gateway's egress counters). The 500,000 target was run for 4 seconds. Nothing is claimed beyond that. The engine is not the limit: on its own it sustains 6.3 to 29 million orders a second. A 70-second run at 50,000 a second (3.5 million orders) filled the order-token table and kept its rate afterwards, rejecting the excess.</div>
 
 <!-- =====================================================================
      REPRODUCE

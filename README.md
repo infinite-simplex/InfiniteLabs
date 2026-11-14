@@ -8,7 +8,7 @@ measurements, with the machine and caveats written next to the numbers.
 
 | Page | Project |
 |---|---|
-| [ToyExchange Core](https://infinite-simplex.github.io/InfiniteLabs/#ToyExchangeCore) | A Disruptor-style exchange core: sequenced ingress, replicated leader-elected matching, a measurement path. C++20. |
+| [DisruptorExchange Core](https://infinite-simplex.github.io/InfiniteLabs/#DisruptorExchangeCore) | A Disruptor-style exchange core: sequenced ingress, replicated leader-elected matching, a measurement path. C++20. |
 | [EventContractLOB](https://infinite-simplex.github.io/InfiniteLabs/#EventContractLOB) | A limit order book for binary-outcome event contracts, speaking NASDAQ OUCH 4.2. C++20. |
 | [BatchGPU](https://infinite-simplex.github.io/InfiniteLabs/#BatchGPU) | An hourly batch auction for GPU compute, cleared by integer network simplex. C++20. |
 | [PokeWatt](https://infinite-simplex.github.io/InfiniteLabs/#PokeWatt) | A Pokémon game controlled by a bike power meter. Python, pygame. |

@@ -1,14 +1,14 @@
-<!-- ToyExchange Core explainer — a fragment loaded into the project panel by script.js.
-     Behavior: ToyExchangeCore.js (mount/unmount). Styles: shared/explainer.css. -->
+<!-- DisruptorExchange Core explainer — a fragment loaded into the project panel by script.js.
+     Behavior: DisruptorExchangeCore.js (mount/unmount). Styles: shared/explainer.css. -->
 <div class="explainer">
 <header class="hero">
   <div class="box">
     <div class="kv"><span class="k">SUBTITLE:</span> <span class="v">The product-agnostic half of an exchange: sequenced ingress, replicated matching, epoch-fenced egress, and a measurement path</span></div>
-    <div class="kv"><span class="k">STATUS:</span> <span class="v warn">OPERATIONAL (V0.4.0)</span></div>
+    <div class="kv"><span class="k">STATUS:</span> <span class="v warn">OPERATIONAL (V0.1.0)</span></div>
     <div class="kv"><span class="k">LAST UPDATED:</span> <span class="v">2026.10.16</span></div>
     <div class="kv"><span class="k">STACK:</span> <span class="v">C++20 · header-only CMake library · Linux x86-64 (epoll, mmap, multicast, calibrated TSC clock with a CLOCK_TAI fallback) · HdrHistogram_c · googletest</span></div>
     <div class="kv"><span class="k">SOURCE:</span>
-      <a href="https://github.com/infinite-simplex/ToyExchange" target="_blank">→ ToyExchange</a> &nbsp;
+      <a href="https://github.com/infinite-simplex/DisruptorExchange" target="_blank">→ DisruptorExchange</a> &nbsp;
       <a href="https://github.com/infinite-simplex/EventContractLOB" target="_blank">→ EventContractLOB (reference product)</a> &nbsp;
       <a href="https://github.com/infinite-simplex/BatchGPU" target="_blank">→ BatchGPU (second product)</a>
     </div>
@@ -34,7 +34,7 @@
 <ul>
   <li><strong><code>Core/</code></strong> — a header-only CMake library: ingress, egress, replica arbitration, the generic replica host, the SPSC queue, and telemetry.</li>
   <li><strong><code>PerformanceService/</code></strong> — monitors the exhanges health through telemetry, consumed via HdrHistogram percentiles.</li>
-  <li><strong><code>Benchmarks/</code></strong> — opt-in tools (<code>-DTOYEXCHANGE_BENCHMARKS=ON</code>). <code>IngressBench</code> runs the real gateway and receivers over a chosen transport. The Aeron comparison below used it.</li>
+  <li><strong><code>Benchmarks/</code></strong> — opt-in tools (<code>-DDISRUPTOREXCHANGE_BENCHMARKS=ON</code>). <code>IngressBench</code> runs the real gateway and receivers over a chosen transport. The Aeron comparison below used it.</li>
   <li><strong>No product logic.</strong> Products consume this repository as a dependency (CMake <code>FetchContent</code>, pinned to a release tag).</li>
 </ul>
 <p>
@@ -533,7 +533,7 @@
     <tr><td class="n">Topology of the run</td><td>One host. The gateway, both replicas, the performance service and the load generator all ran on the same machine, with the multicast groups on the loopback interface inside a network namespace.
       One clock serves every process, so the cross-machine metrics are valid, but they do not measure a network.</td></tr>
     <tr><td class="n">Build</td><td>Release: <code>-O3 -march=native -mtune=native -Wall -Wextra -pthread</code>.
-	Core v0.4.0 with EventContractLOB at commit 1ffba01. GCC 13.3, CMake 3.28.</td></tr>
+	Core at commit d7edf6b with EventContractLOB at commit 1ffba01. GCC 13.3, CMake 3.28.</td></tr>
   </tbody>
 </table>
 </div>
@@ -583,5 +583,5 @@
 <pre class="code">cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
 ctest --test-dir build --output-on-failure</pre>
-<p>The benchmarks are not part of the default build. Add <code>-DTOYEXCHANGE_BENCHMARKS=ON</code> to the first command and build the <code>IngressBench</code> target.</p>
+<p>The benchmarks are not part of the default build. Add <code>-DDISRUPTOREXCHANGE_BENCHMARKS=ON</code> to the first command and build the <code>IngressBench</code> target.</p>
 </div>

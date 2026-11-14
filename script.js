@@ -11,16 +11,16 @@ const projectsData = {
     projects: [
         {
             segmentId: "SEGMENT 00064",
-            title: "TOY EXCHANGE CORE",
+            title: "DISRUPTOR EXCHANGE CORE",
             status: "NOMINAL",
             technologies: "C++20 DISRUPTOR",
-            htmlFile: "ToyExchangeCore.html",
+            htmlFile: "DisruptorExchangeCore.html",
             // Optional ES module in projects/ exporting mount(root) -> unmount().
             // Scripts inside fetched HTML never run, so animated projects ship
             // their behavior as a module that the loader mounts after injecting.
-            module: "ToyExchangeCore.js",
+            module: "DisruptorExchangeCore.js",
             links: {
-                github: "https://github.com/infinite-simplex/ToyExchange"
+                github: "https://github.com/infinite-simplex/DisruptorExchange"
             }
         },
         {

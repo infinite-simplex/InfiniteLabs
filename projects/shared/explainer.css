@@ -1,4 +1,4 @@
-/* Shared styles for the retro "explainer" project pages (EventContractLOB, ToyExchangeCore).
+/* Shared styles for the retro "explainer" project pages (EventContractLOB, DisruptorExchangeCore).
    Loaded once from index.html. Everything is inside @scope (.explainer), so none of it can
    restyle the portfolio shell, and the shell's styles.css can't leak in. */
 /* Everything below is scoped to .explainer (the fragment's root) so nothing here
